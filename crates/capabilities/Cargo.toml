@@ -1,11 +1,21 @@
 [package]
 name = "halquen-capabilities"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
 
 
 [lib]
 path = "src/lib.rs"
 
 [dependencies]
-halquen-domain = { path = "../domain" }
+halquen-domain = { version = "0.1.0", path = "../domain" }
+halquen-policy = { version = "0.1.0", path = "../policy" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,10 +1,22 @@
 [package]
 name = "halquen-storage"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
 
 
 [lib]
 path = "src/lib.rs"
 
 [dependencies]
+halquen-audit = { version = "0.1.0", path = "../audit" }
+halquen-domain = { version = "0.1.0", path = "../domain" }
+halquen-memory = { version = "0.1.0", path = "../memory" }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

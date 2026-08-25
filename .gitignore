@@ -1,5 +1,5 @@
 # Rust cargo
-target/
+/target/
 
 # db
 *.db

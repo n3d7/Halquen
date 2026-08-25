@@ -1,11 +1,17 @@
 [package]
 name = "halquen-policy"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
 
 
 [lib]
 path = "src/lib.rs"
 
 [dependencies]
-halquen-domain = { path = "../domain" }
+halquen-domain = { version = "0.1.0", path = "../domain" }
+serde = { workspace = true }
+
+[lints]
+workspace = true

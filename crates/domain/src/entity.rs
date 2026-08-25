@@ -1,12 +1,26 @@
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct EntityId(String);
+use serde::{Deserialize, Serialize};
 
-impl EntityId {
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
+use crate::EntityId;
 
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntityKind {
+    Application,
+    Project,
+    File,
+    Person,
+    Device,
+    Routine,
+    Generic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Entity {
+    pub id: EntityId,
+    pub kind: EntityKind,
+    pub canonical_name: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub valid_from_ms: Option<i64>,
+    pub valid_until_ms: Option<i64>,
 }

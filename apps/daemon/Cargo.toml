@@ -1,9 +1,22 @@
 [package]
 name = "halquen-daemon"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
 
 [dependencies]
-halquen-domain = { path = "../../crates/domain" }
-halquen-capabilities = { path = "../../crates/capabilities" }
-halquen-policy = { path = "../../crates/policy" }
+halquen-audit = { version = "0.1.0", path = "../../crates/audit" }
+halquen-capabilities = { version = "0.1.0", path = "../../crates/capabilities" }
+halquen-domain = { version = "0.1.0", path = "../../crates/domain" }
+halquen-policy = { version = "0.1.0", path = "../../crates/policy" }
+halquen-protocol = { version = "0.1.0", path = "../../crates/protocol" }
+halquen-storage = { version = "0.1.0", path = "../../crates/storage" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
+
+[lints]
+workspace = true

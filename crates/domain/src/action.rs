@@ -2,8 +2,17 @@ use crate::{
     CapabilityId,
     EntityId,
 };
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionArgumentKind {
+    None,
+    OpenApp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ActionArguments {
     None,
 
@@ -12,7 +21,16 @@ pub enum ActionArguments {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl ActionArguments {
+    pub fn kind(&self) -> ActionArgumentKind {
+        match self {
+            Self::None => ActionArgumentKind::None,
+            Self::OpenApp { .. } => ActionArgumentKind::OpenApp,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActionRequest {
     pub capability_id: CapabilityId,
     pub arguments: ActionArguments,
