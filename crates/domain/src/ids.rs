@@ -111,6 +111,12 @@ typed_id!(ProposalId, validate_opaque);
 typed_id!(CorrectionId, validate_opaque);
 typed_id!(UnknownCaseId, validate_opaque);
 typed_id!(AuditId, validate_opaque);
+typed_id!(ActivityId, validate_opaque);
+typed_id!(CacheEntryId, validate_opaque);
+typed_id!(ChatMessageId, validate_opaque);
+typed_id!(ChatSessionId, validate_opaque);
+typed_id!(ModelId, validate_opaque);
+typed_id!(ProviderId, validate_opaque);
 
 fn generated_value(prefix: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -140,6 +146,12 @@ generated_id!(ProposalId, "proposal");
 generated_id!(CorrectionId, "correction");
 generated_id!(UnknownCaseId, "unknown");
 generated_id!(AuditId, "audit");
+generated_id!(ActivityId, "activity");
+generated_id!(CacheEntryId, "cache");
+generated_id!(ChatMessageId, "message");
+generated_id!(ChatSessionId, "session");
+generated_id!(ModelId, "model");
+generated_id!(ProviderId, "provider");
 
 #[cfg(test)]
 mod tests {

@@ -6,6 +6,7 @@ pub mod entity;
 pub mod event;
 mod ids;
 pub mod intent;
+pub mod interaction;
 pub mod trust;
 
 pub use action::{
@@ -25,8 +26,15 @@ pub use capability::{
 pub use entity::{Entity, EntityKind};
 pub use event::{Correction, Event, EventKind, QueueStatus, UnknownCase};
 pub use ids::{
-    AuditId, CapabilityId, CorrectionId, EntityId, EventId, EvidenceId, ExecutionId, IdError,
-    IntentId, MemoryId, MemoryRevisionId, ProposalId, UnknownCaseId,
+    ActivityId, AuditId, CacheEntryId, CapabilityId, ChatMessageId, ChatSessionId, CorrectionId,
+    EntityId, EventId, EvidenceId, ExecutionId, IdError, IntentId, MemoryId, MemoryRevisionId,
+    ModelId, ProposalId, ProviderId, UnknownCaseId,
 };
 pub use intent::{AiProposal, Intent, ProposalPayload, ProposalStatus};
+pub use interaction::{
+    ActivityEvent, ActivityKind, AiModel, AiTaskType, AppearanceMode, ApplicationSettings,
+    ChatMessage, ChatOrigin, ChatRole, ChatRoute, ChatSession, ContextCategory, DiagnosticEntry,
+    DiagnosticSeverity, LogLevel, ModelSelection, PrivacyClass, Provider, ProviderKind,
+    ProviderStatus, ResponseFeedback, RoutingPreset, UsageStats,
+};
 pub use trust::TrustClass;

@@ -11,6 +11,7 @@ members = [
     "crates/storage",
     "crates/audit",
     "crates/protocol",
+    "crates/ai",
 ]
 
 [workspace.package]
@@ -19,10 +20,15 @@ rust-version = "1.97"
 
 [workspace.dependencies]
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+futures-util = "0.3"
+keyring = "4.0"
+reqwest = { version = "0.13", default-features = false, features = ["default-tls", "json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 tokio = { version = "1.53.1", default-features = false, features = ["io-util", "macros", "net", "rt", "signal", "time"] }
+url = "2.5"
+zeroize = "1.8"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

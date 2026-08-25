@@ -15,6 +15,25 @@ pub use procedural::{ProceduralCandidate, ProceduralPromotionValidator, Promotio
 pub use semantic::{MemoryError, MemoryItem, MemoryKind, MemoryLedger, MemoryRevision, MemoryValue};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryView {
+    pub item: MemoryItem,
+    pub current: MemoryRevision,
+    pub evidence_count: u64,
+    pub trust_classes: Vec<halquen_domain::TrustClass>,
+    pub priority_permille: u16,
+    pub confidence_permille: u16,
+    pub pinned: bool,
+    pub disabled: bool,
+    pub last_used_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryRevisionView {
+    pub revision: MemoryRevision,
+    pub trust_classes: Vec<halquen_domain::TrustClass>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkingValue {
     EntityReference { entity_id: halquen_domain::EntityId },
