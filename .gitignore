@@ -1,0 +1,22 @@
+# Rust cargo
+target/
+
+# db
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# secret
+.env
+.env.*
+
+# data
+data/
+logs/
+
+# editor / os
+.idea/
+.vscode/
+.DS_Store

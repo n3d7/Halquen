@@ -4,3 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+halquen-domain = { path = "../../crates/domain" }
+halquen-capabilities = { path = "../../crates/capabilities" }
+halquen-policy = { path = "../../crates/policy" }

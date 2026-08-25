@@ -8,3 +8,4 @@ edition = "2024"
 path = "src/lib.rs"
 
 [dependencies]
+halquen-domain = { path = "../domain" }

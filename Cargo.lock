@@ -9,6 +9,9 @@ version = "0.1.0"
 [[package]]
 name = "halquen-capabilities"
 version = "0.1.0"
+dependencies = [
+ "halquen-domain",
+]
 
 [[package]]
 name = "halquen-cli"
@@ -17,6 +20,11 @@ version = "0.1.0"
 [[package]]
 name = "halquen-daemon"
 version = "0.1.0"
+dependencies = [
+ "halquen-capabilities",
+ "halquen-domain",
+ "halquen-policy",
+]
 
 [[package]]
 name = "halquen-domain"
@@ -29,6 +37,9 @@ version = "0.1.0"
 [[package]]
 name = "halquen-policy"
 version = "0.1.0"
+dependencies = [
+ "halquen-domain",
+]
 
 [[package]]
 name = "halquen-protocol"
