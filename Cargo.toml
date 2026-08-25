@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "apps/daemon",
+    "apps/cli",
+    "crates/domain",
+    "crates/capabilities",
+    "crates/policy",
+    "crates/memory",
+    "crates/storage",
+    "crates/audit",
+    "crates/protocol",
+]
