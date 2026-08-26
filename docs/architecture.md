@@ -1,62 +1,97 @@
-# Core architecture
+# Architecture
 
-Halquen's implemented core is a directed acyclic workspace. The domain crate is the lowest layer;
-the daemon is the composition root.
+Halquen separates the renderer, desktop bridge, daemon, and authority-bearing core.
 
 ```text
-halquen-domain
-├── halquen-policy
-├── halquen-memory
-├── halquen-audit ──────────────→ halquen-policy
-├── halquen-capabilities ───────→ halquen-policy
-├── halquen-storage ────────────→ halquen-memory + halquen-audit
-└── halquen-protocol ───────────→ halquen-policy + halquen-audit
-
-halquen-daemon ─────────────────→ all core crates
-halquen-cli ────────────────────→ halquen-domain + halquen-protocol
+React renderer
+    │ typed invoke commands only
+    ▼
+Tauri Rust bridge
+    │ halquen-protocol v2
+    ▼
+private Unix socket
+    ▼
+halquen-daemon
+    ├── local chat resolver / response reuse
+    ├── model router / AI gateway
+    ├── memory validation / policy / capabilities
+    ├── SQLite / audit / activity / usage
+    └── OS credential store
 ```
 
-There are no circular crate dependencies. `halquen-domain` has no Tokio, SQLite, networking, UI, or
-operating-system execution code.
+The renderer has no SQLite, filesystem, shell, process, executor, keyring, or provider-network API.
+Tauri commands translate typed GUI calls to the same protocol used by the CLI and contain no policy,
+memory, routing, or execution implementation.
 
-## Request path
+## Workspace boundaries
 
-The CLI serializes one versioned, request-ID-bearing JSON frame and connects to a private Unix
-socket. The daemon validates the bounded frame, resolves the typed capability ID in a deterministic
-registry, checks argument shape, and asks the policy engine for `Allow`, `Confirm`, or `Deny`.
+- `halquen-domain` contains identifiers and fundamental action, provider, chat, settings, activity,
+  diagnostics, and usage types. It has no async runtime, database, UI, or networking dependency.
+- `halquen-policy` produces `Allow`, `Confirm`, or `Deny` and binds a non-clone execution
+  authorization to the exact typed action. An explicit confirmation can authorize that action once
+  but can never override `Deny`.
+- `halquen-capabilities` owns the deterministic registry and executor contract. The current executor
+  is dry-run only.
+- `halquen-memory` owns evidence, immutable revisions, derived memory kind, and promotion rules.
+- `halquen-storage` owns XDG paths, numbered migrations, SQLite transactions, and query limits.
+- `halquen-audit` defines durable policy/execution receipts.
+- `halquen-protocol` owns versioned IPC DTOs, bounded framing, secure runtime paths, and the shared
+  daemon client.
+- `halquen-ai` owns bounded context projections, managed prompt composition, deterministic routing,
+  provider-neutral requests/responses, OpenAI-compatible HTTP, and the keyring abstraction.
+- `halquen-daemon` is the sole composition/business-logic root.
+- `halquen-cli` and `halquen-desktop` are clients of the daemon.
 
-Only `Allow` includes an `ExecutionAuthorization`. Policy creates it only after checking the exact
-typed action against the trusted descriptor. The non-clone token owns the execution ID, complete
-descriptor/version, exact action arguments, and normalized policy scopes. Executor ownership
-consumes it, so a token cannot be reused through the API or paired with another request. The only
-executor is `DryRunExecutor`; it performs no operating-system action.
+Dependencies remain directed toward domain/core crates; the GUI is not a peer authority.
 
-Execution is an async, cooperatively cancellable future wrapped in a Tokio deadline derived from the
-trusted descriptor. `Confirm` and `Deny` produce no token and therefore never emit
-`ExecutionStarted`. Allowed runs emit `ActionRequested`, `PolicyEvaluated`, `ExecutionStarted`, and
-one terminal completion/failure/timeout event. Blocked runs emit a confirmation or denial event.
+## Chat cascade
 
-## Persistence and concurrency
+The implemented conversational path is:
 
-SQLite is owned by the single-threaded daemon service. Connections explicitly enable foreign keys
-and a five-second busy timeout. Persistent databases request and verify WAL mode. Migrations are
-ordered, transactional, and recorded in `schema_migrations`.
+```text
+request validation
+  → exact deterministic local parser
+  → validated exact response reuse
+  → eligible provider/model routing
+  → bounded context + managed prompt
+  → provider-neutral completion
+```
 
-The Tokio runtime is current-thread and event-driven. The daemon waits on socket acceptance or
-shutdown, with no polling loop or background worker. Requests are handled sequentially, keeping
-SQLite ownership and audit ordering straightforward.
+`Open <application>` becomes a typed capability request without AI. Supported explicit
+`remember`/alias/preference and `forget` phrases become versioned semantic-memory operations with
+`UserExplicit` evidence. Other requests may use AI only if settings, provider/model availability,
+privacy class, and manual-selection policy all permit it.
 
-## Memory
+An AI answer is stored as a non-reusable response candidate with `AiInferred` trust. It becomes
+eligible for exact normalized reuse only after explicit positive feedback such as “Always reuse”.
+It never becomes action authorization or trusted procedural memory.
 
-Working memory is bounded and in-process. Semantic and procedural memory use immutable revisions,
-explicit evidence links, temporal validity fields, and a current-revision pointer. `MemoryValue`
-derives its kind; in-memory and SQLite trust boundaries reject any caller-supplied kind mismatch.
+## Provider and prompt model
 
-SQLite resolves exactly the evidence IDs referenced by the new revision inside the same transaction
-as the write. Procedural authority is computed only from that resolved set. Existing stored kind,
-creation timestamp, and head are authoritative. A successor must name the current head, the head
-must belong to the same item, and the final head update is compare-and-swap guarded. Restoring an old
-value creates a new successor rather than deleting or rewinding history.
+Providers and models are separate typed records. The router checks enabled/configured status, task
+eligibility, provider/model privacy agreement, cloud/local settings, personal-context policy,
+selection mode, preset, default flag, and priority. Manual selection runs through the same checks.
 
-AI proposals, unknown cases, and corrections have typed domain representations and persistent
-tables. They do not execute foreground requests and AI proposals cannot mutate trusted memory.
+Every model call composes:
+
+1. the immutable Halquen security contract;
+2. a versioned task profile and optional output schema;
+3. bounded user-editable personal instructions;
+4. a bounded structured context projection with explicit untrusted markers;
+5. the current request.
+
+Chat history shown in the GUI is not automatically model context. No entire database, audit log, or
+conversation archive is sent.
+
+## Operational state
+
+Migration `0002_desktop_interaction.sql` adds explicit settings, provider/model metadata, chat,
+response candidates, activity, usage, and memory-state metadata. Credentials are outside SQLite.
+
+Operational logs, activity events, and audit records are distinct:
+
+- logs diagnose the process and rotate under XDG state limits;
+- activity explains user-visible route/policy/memory facts without chain of thought;
+- audit stores durable security/execution lifecycle records.
+
+The current-thread daemon is event-driven and performs no idle polling or background model calls.

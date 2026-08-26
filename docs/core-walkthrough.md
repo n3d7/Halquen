@@ -1,71 +1,68 @@
-# Deterministic core walkthrough
+# Core walkthrough
 
-## Workspace responsibilities
+## Local capability request
 
-`halquen-domain` defines capability, action, entity, intent, event, proposal, trust, and identifier
-types. Its validated newtypes stop malformed IDs at deserialization boundaries, and it has no runtime
-or persistence dependencies.
+For `Open Telegram` in Chat:
 
-`halquen-policy` maps trusted descriptors to a typed decision and machine-readable reason. An allowed
-authorization owns the exact typed action, full descriptor/version, execution ID, and normalized
-scope context. It is non-clone and consumed by execution.
+1. The GUI sends a typed protocol-v2 `ChatRequest` through the Tauri bridge and private Unix socket.
+2. The daemon persists the user message and a structured request activity event.
+3. The deterministic parser resolves `system.open_app` and constructs typed `OpenApp` arguments.
+4. The trusted registry validates the argument shape and policy returns `Allow`, `Confirm`, or
+   `Deny` from descriptor risk/side-effect metadata.
+5. Only an allowed exact action receives a consumable authorization. The current executor returns a
+   simulated receipt under the descriptor timeout and performs no OS side effect.
+6. Audit lifecycle, activity, assistant message, and usage counters are persisted; the UI displays a
+   concise result with expandable local-route metadata. No AI provider is called.
 
-`halquen-capabilities` owns the deterministic registry, trusted built-in descriptors, and async
-executor contract. Its dry-run executor validates the descriptor/action consistency embedded in the
-authorization and performs no OS action.
+An action requiring confirmation is retained server-side under a random, expiring, single-use ID.
+“Allow once” re-evaluates policy through the confirmation-only path and consumes the entry before
+execution. Cancel, expiry, replay, or `Deny` cannot execute.
 
-`halquen-memory` contains bounded working context, semantic/procedural revision logic, episodic
-records, evidence, and procedural promotion rules. Restoration creates a new revision.
+## Explicit memory request
 
-`halquen-audit` defines durable policy/execution/memory events and execution receipts. These types are
-structured rather than free-form log messages.
+For `Remember that when I say "editor" I mean Zed`:
 
-`halquen-storage` owns XDG data paths, SQLite configuration, migrations, transactional persistence,
-and aggregate memory/audit statistics. It also enforces trusted evidence for persistent procedural
-memory.
+1. The local parser recognizes a bounded alias/preference grammar; it does not ask a model.
+2. The user's exact statement creates `UserExplicit` evidence and a typed preference value.
+3. Memory kind, evidence linkage, trust, conflict/head state, and revision shape are validated.
+4. SQLite inserts evidence and the immutable revision transactionally and advances the guarded head.
+5. Chat and Activity report the committed preference. History restoration later creates another new
+   revision instead of deleting history.
 
-`halquen-protocol` defines protocol version 1, request and response envelopes, frame limits, codecs,
-and secure XDG runtime-path validation.
+AI interpretation is not used as evidence for this path. Unsupported or ambiguous procedural prose
+does not become executable code or a trusted procedure.
 
-`halquen-daemon` composes these services and owns all business decisions. `halquen-cli` only parses a
-small command surface, exchanges one frame, and displays the typed response.
+## Novel conversational request and reuse
 
-## One request end to end
+For a request not resolved locally:
 
-For `halquen dry-run open-app app:telegram`:
+1. The daemon checks exact normalized, feedback-approved, fresh reusable responses.
+2. On a miss, the deterministic router chooses an eligible configured model or returns a clear local
+   unavailable response when AI is disabled/unconfigured.
+3. `ContextBuilder` selects a bounded projection and preserves the trust/untrusted marker of every
+   item. `PromptComposer` prepends the immutable security contract before task and personal text.
+4. The provider-neutral gateway calls an approved OpenAI-compatible endpoint with normal TLS,
+   redirect denial, timeouts, and a bounded response.
+5. The answer is persisted as chat plus an `AiInferred`, initially non-reusable candidate. Usage and
+   route/activity facts are recorded without provider bodies or chain of thought.
+6. If the user explicitly marks it “Always reuse”, a later exact normalized request can return the
+   validated local response with zero provider calls. Negative feedback lowers/revokes reuse.
 
-1. The CLI creates `ActionRequest { capability_id: system.open_app, arguments: OpenApp(...) }`.
-2. It wraps the action with protocol version 1 and a request ID, encodes at most 64 KiB, and connects
-   to the private Unix socket.
-3. The daemon bounds and parses the frame, then looks up `system.open_app` in `CapabilityRegistry`.
-4. The action's `OpenApp` argument kind is checked against the trusted descriptor.
-5. `PolicyEngine` evaluates the descriptor's trusted risk and binds an `Allow` token to this exact
-   request and scope context; `Confirm` and `Deny` do not receive a token.
-6. The daemon consumes the token in `DryRunExecutor` under the descriptor's deadline. It returns the
-   safe result code `Simulated` and performs no OS operation.
-7. The daemon builds an `ExecutionReceipt` and explicit requested/policy/started/terminal audit
-   lifecycle.
-8. SQLite inserts the receipt and all audit events in one transaction.
-9. The daemon returns the decision and receipt through the versioned protocol; the CLI displays IDs
-   and status only.
+This implements the milestone's core product test: a novel request may use AI once, while a repeated
+validated request is checked locally first and can avoid both provider tokens and a resident local
+model.
 
-For `Confirm` or `Deny`, step 6 is skipped, no `ExecutionStarted` event exists, a `NotExecuted`
-receipt is recorded, and the response returns immediately. An unknown interactive request is
-unsupported or becomes an explicit learning
-queue item through a future caller; it never waits silently for batch execution.
+## Desktop controls
 
-## Memory changes
+- Chat supports conversation history, Automatic/manual model selection, confirmation, feedback,
+  sanitized errors, and a privacy-oriented AI request preview.
+- Memory supports bounded search/filtering, evidence/trust metadata, pin/disable, and immutable
+  revision history/restoration.
+- AI supports provider/key setup, connection tests, model setup/defaults, privacy-aware routing
+  settings, managed/personal prompt separation, and usage/estimated-efficiency metrics.
+- Activity explains routes and outcomes; Diagnostics shows protocol/schema/paths/provider state and
+  recent sanitized entries; Settings persists validated appearance, privacy, budgets, learning,
+  retention, and logging controls.
 
-An accepted memory change carries unique evidence IDs and creates an immutable revision. The memory
-item points to its newest revision while previous revisions remain addressable. Persistence resolves
-exactly those IDs inside the transaction and requires every successor to extend the stored current
-head. Procedural candidates also name their exact evidence IDs before policy review. Persistent
-procedural memory additionally requires referenced `UserExplicit` or
-`UserConfirmedResult` evidence. AI inference, external content, and unrelated trusted evidence
-cannot cross this authority boundary.
-
-## Intentionally absent
-
-The core has no model SDK, inference runtime, embeddings, graph/vector database, arbitrary shell,
-real OS automation, plugin loader, MCP, network listener, GUI, voice, clipboard monitoring, or secret
-storage. Interfaces were added only for boundaries exercised by the deterministic core.
+All lists are bounded and refreshed on screen entry or explicit user action. There are no busy loops,
+short polling intervals, background model calls, or renderer-owned business rules.

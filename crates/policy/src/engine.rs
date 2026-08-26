@@ -100,6 +100,37 @@ impl PolicyEngine {
         }
     }
 
+    pub fn authorize_confirmed_once(
+        &self,
+        capability: &CapabilityDescriptor,
+        action: ActionRequest,
+        execution_id: ExecutionId,
+        context: &PolicyContext,
+    ) -> PolicyEvaluation {
+        if action.capability_id != capability.id || action.arguments.kind() != capability.arguments {
+            return blocked(PolicyOutcome::Deny, PolicyReason::InvalidActionContract);
+        }
+        let initial = self.decide(capability, context);
+        if initial.outcome == PolicyOutcome::Deny {
+            return PolicyEvaluation::blocked(initial);
+        }
+        let decision = if initial.outcome == PolicyOutcome::Confirm {
+            PolicyDecision {
+                outcome: PolicyOutcome::Allow,
+                reason: PolicyReason::UserConfirmedOnce,
+            }
+        } else {
+            initial
+        };
+        let authorization = ExecutionAuthorization::new(
+            execution_id,
+            capability.clone(),
+            action,
+            context.normalized_grants(),
+        );
+        PolicyEvaluation::allowed(decision, authorization)
+    }
+
     fn decide(
         &self,
         capability: &CapabilityDescriptor,
@@ -296,5 +327,30 @@ mod tests {
         let mut v2 = v1.clone();
         v2.version = 2;
         assert!(!authorization.matches(&v2, &telegram));
+    }
+
+    #[test]
+    fn explicit_confirmation_authorizes_once_but_never_overrides_deny() {
+        let external = descriptor(RiskClass::ExternalSideEffect);
+        let action = ActionRequest::new(external.id.clone(), ActionArguments::None);
+        let result = PolicyEngine::new().authorize_confirmed_once(
+            &external,
+            action,
+            ExecutionId::generate(),
+            &PolicyContext::default(),
+        );
+        assert_eq!(result.decision.reason, PolicyReason::UserConfirmedOnce);
+        assert!(result.authorization().is_some());
+
+        let privileged = descriptor(RiskClass::Privileged);
+        let action = ActionRequest::new(privileged.id.clone(), ActionArguments::None);
+        let result = PolicyEngine::new().authorize_confirmed_once(
+            &privileged,
+            action,
+            ExecutionId::generate(),
+            &PolicyContext::default(),
+        );
+        assert_eq!(result.decision.outcome, PolicyOutcome::Deny);
+        assert!(result.authorization().is_none());
     }
 }

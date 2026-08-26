@@ -1,75 +1,77 @@
 # Security boundaries
 
-This milestone establishes security invariants; it is not claimed to be production-ready or fully
-secure.
+This document describes implemented controls, not a claim of complete system security.
 
-## Authority boundaries
+## Authority
 
-- Capability descriptors are registered from trusted code. Duplicate IDs are rejected and IDs must
-  follow lowercase `namespace.operation` syntax.
-- Actions contain typed arguments. There is no shell, command, script, eval, or generic file-execute
-  capability.
-- Policy is independent of interpretation confidence. Read-only, non-reversible local side effects,
-  and configured genuinely reversible local writes may be allowed; external and destructive actions
-  require confirmation; privileged and unknown risk are denied. Invalid risk/side-effect/
-  reversibility combinations are rejected at descriptor registration and policy evaluation.
-- An executor requires a non-clone `ExecutionAuthorization` produced only by an `Allow` decision.
-  It owns the exact typed action, trusted descriptor/version, execution ID, and normalized scope
-  context, and execution consumes it.
-- `ExternalContent`, `AiInferred`, plugin assertions, local verification, and observed behaviour do
-  not independently authorize procedural memory. SQLite resolves only the revision's referenced
-  evidence IDs inside the write transaction; unrelated supplied evidence is rejected and cannot
-  lend authority. The preliminary promotion validator applies the same exact-ID binding before a
-  candidate can reach policy review. Repeated AI evidence therefore cannot bootstrap its own
-  authority.
-- AI proposals remain separate, typed, pending records until a future deterministic validation and
-  user-authorized acceptance path exists.
+- Model text and external content are untrusted data. They cannot create an execution token, modify
+  trusted memory, alter policy, grant permission, or invoke shell/process APIs.
+- Capabilities are registered typed descriptors. There is no arbitrary shell, script, raw SQL, raw
+  provider request, or generic file-execute protocol command.
+- The executor consumes a non-clone authorization bound to the exact action, descriptor/version,
+  execution ID, and normalized scope. `Confirm` creates a server-side, expiring, single-use token;
+  dismissing/cancelling is not approval. `Deny` still cannot reach the executor.
+- `MemoryValue` derives its authoritative kind. SQLite resolves exactly a revision's referenced
+  evidence inside the write transaction. Missing, duplicate, unrelated, cross-item, stale-head, and
+  kind-spoofing cases fail. `AiInferred`, `ExternalContent`, plugin assertions, local verification,
+  and passive behaviour cannot independently authorize procedural memory.
+- Reusable conversational responses remain separate from semantic/procedural memory and never carry
+  execution authorization. AI candidates require explicit feedback before reuse and have bounded
+  confidence, priority, trust, and validity fields.
 
-## IPC and filesystem
+## Renderer and IPC
 
-The daemon binds only `$XDG_RUNTIME_DIR/halquen/halquen.sock`. The runtime root and application
-directory must be absolute, real, owned by the current UID, and inaccessible to group/other users.
-The socket is set to `0600`. Existing symlinks and non-socket objects are never replaced. If a secure
-runtime directory is unavailable, startup fails closed.
+- The WebView loads only bundled local content. CSP permits only `self`, Tauri IPC, and data images;
+  inline scripts/styles and remote content are not permitted.
+- Markdown skips raw HTML. Links are rendered as inert text rather than clickable external anchors.
+- Tauri exposes no filesystem or shell plugin and only the minimal core capability. Custom commands
+  map to typed protocol requests; there is no secret getter, direct executor, or database command.
+- IPC is a private `0600` Unix socket under a user-owned `0700` runtime directory. It accepts one
+  newline-terminated JSON frame per connection, capped at 64 KiB with bounded I/O timeouts. No TCP
+  control listener exists.
 
-Persistent data uses XDG data paths. The Halquen directory is `0700` and the SQLite file is `0600`.
-The runtime socket is deliberately kept outside persistent storage.
+## Provider and secret security
 
-IPC uses one newline-terminated JSON frame per connection, capped at 64 KiB with five-second I/O
-timeouts. EOF without the terminator, partial disconnects, trailing messages, malformed JSON,
-oversized frames, and unknown versions fail cleanly. Request IDs are validated.
+- Provider networking exists only in `halquen-ai`. The HTTP client enables normal TLS verification,
+  disables redirects, applies connect/read/overall timeouts, and bounds completion bodies to 1 MiB.
+- Cloud endpoints require HTTPS. Plain HTTP is accepted only for an explicitly local provider on
+  `localhost`, `127.0.0.1`, or `::1`. Credentials, query strings, and fragments in base URLs are
+  rejected.
+- Provider status and HTTP errors are mapped to sanitized enums/messages. Response bodies and
+  Authorization headers are not returned or logged.
+- API keys pass transiently through the local GUI request and are immediately cleared from the
+  controlled input after invoke serialization. JavaScript strings cannot be reliably zeroized;
+  the renderer therefore has no read-secret API and never stores them in localStorage, SQLite,
+  source, logs, or audit.
+- The daemon stores secrets in the OS keyring using opaque IDs. Endpoint validation happens before a
+  keyring mutation. Keyring/SQLite provider updates capture the previous secret and compensate on a
+  database failure. No plaintext fallback exists.
+- Manual cloud-model selection cannot bypass cloud-disabled or personal-context privacy policy.
 
-## Database and audit
+## Persistence and observability
 
-All value-bearing SQL operations use bound parameters. Dynamic table selection is limited to a
-closed internal match. Foreign keys are verified active; multi-row execution and memory writes are
-transactional. Persistent databases verify WAL and connections use a bounded busy timeout.
-Migration failure is returned without recreating the database.
-
-Memory persistence treats the stored kind and head as authoritative. It rejects first revisions with
-a predecessor, stale branches, cross-item predecessors, duplicate evidence references, caller kind
-mutation, and head changes detected by a guarded update.
-
-Receipts contain IDs, policy, status, timing, reversibility, result/error codes, and sanitized errors.
-Audit records do not contain full request bodies, action arguments, secrets, file contents,
-clipboard data, or prompt context. The storage API exposes insertion but no audit update/delete, and
-duplicate IDs cannot overwrite an existing record. This is append-oriented application semantics,
-not cryptographic immutability or tamper evidence. Memory rollback is restoration through a new
-revision. External actions are not falsely labelled rollbackable.
+- SQLite uses bound parameters, foreign keys, a bounded busy timeout, transactional numbered
+  migrations, and verified WAL for persistent databases. Memory writes and referenced evidence are
+  checked in the same transaction.
+- Audit APIs are append-oriented and exclude raw action arguments, prompts, secrets, file contents,
+  and clipboard data. This is not cryptographic tamper evidence.
+- Operational logs live in a private XDG state directory. Startup applies validated level,
+  diagnostic toggle, retention days, and maximum total size. Central redaction covers representative
+  Authorization, bearer-token, API-key, password, and oversized-token patterns.
+- Diagnostics and activity expose structured reason/status metadata, never hidden chain of thought.
 
 ## Current limitations
 
-- Only dry-run execution exists; application launching is intentionally not implemented.
-- Async deadlines cancel cooperative executor futures by dropping them. A future real executor must
-  not hide irreversible blocking work behind an uncancellable `spawn_blocking` task.
-- The daemon handles one local client at a time. Timeouts bound a stalled connection, but per-user
-  denial of service has not been fully hardened.
-- There is no authentication beyond local Unix ownership and permissions, and no OS credential-store
-  integration because the core stores no secrets.
-- Linux `/proc/self/status` is used to determine the current UID. Other operating systems are not yet
-  supported.
-- Filesystem ownership/mode checks reduce symlink substitution but are path-based and do not claim
-  race-free `openat2`-style resolution.
-- `permission_grants` is reserved schema only. There is no API to create/revoke persistent grants,
-  and policy does not load or honor rows from that table.
-- Plugin, MCP, model-provider, GUI, voice, browser, and synchronization layers are absent.
+- Linux/Unix sockets and Linux ownership discovery are the supported platform path.
+- Execution is dry-run only. A future real executor requires additional capability-specific threat
+  modelling and cancellable side-effect semantics.
+- The daemon handles requests sequentially. A long non-streaming provider call can delay other local
+  clients; provider timeouts bound it, but protocol streaming/cancellation is not implemented.
+- OpenAI-compatible/OpenAI/Ollama/LM Studio adapters are implemented. Anthropic and Gemini are typed
+  unsupported boundaries, not guessed network implementations.
+- The OS keyring must be available for cloud credentials; session-only secrets are not implemented.
+- Persistent permission grants, background consolidation, semantic similarity reuse, embeddings,
+  provider cost tables, and automatic model discovery are not implemented.
+- Diagnostics exposes a bounded in-memory recent list and automatic log rotation; clearing/opening
+  log files from the GUI is not yet exposed.
+- Filesystem validation is path-based and does not claim race-free `openat2` resolution.

@@ -1,55 +1,84 @@
 # Halquen
 
-Halquen is a Linux-first deterministic core for capability-safe local automation. The current
-milestone implements typed actions, action-bound policy authorization, deadline-bounded dry-run
-execution, versioned Unix-socket IPC, append-oriented audit records, evidence-backed linear memory
-revisions, and SQLite persistence.
+Halquen is a Linux-first, local-first personal assistant built around typed knowledge, evidence,
+deterministic routing, and capability-safe execution. Its desktop application is a client of the
+independently managed daemon; AI providers are optional reasoning backends, not the authority for
+actions or trusted memory.
 
-The central security rule is: model output and external content are advice, while registered
-capabilities, deterministic policy, and trusted evidence are authority. No model provider, plugin
-loader, network service, or arbitrary shell execution exists in this milestone.
+The current milestone includes:
 
-## Run locally
+- a Tauri v2 + React/TypeScript desktop client with Chat, Activity, Memory, AI, Diagnostics, and
+  Settings screens;
+- a versioned Unix-socket protocol shared by the CLI and GUI;
+- local-first chat routing, explicit memory commands, single-use confirmation, and conservative
+  reusable-response candidates;
+- an OpenAI-compatible AI gateway for OpenAI, Ollama, LM Studio, and custom compatible endpoints;
+- provider/model routing with cloud/local privacy classes and bounded token/model-call budgets;
+- OS-keyring secret storage, typed SQLite settings, schema-v2 migrations, usage counters, activity,
+  structured audit records, and bounded operational logs.
 
-The daemon requires a private `XDG_RUNTIME_DIR`. On a normal Linux desktop this is already set.
+The invariant is:
+
+```text
+LLM output is advice.
+Capabilities, policy, and trusted memory are authority.
+```
+
+## Development
+
+Start the daemon in one terminal:
 
 ```bash
 cargo run -p halquen-daemon
 ```
 
-In another terminal:
+Start the desktop client in another:
+
+```bash
+pnpm --dir apps/desktop install
+pnpm --dir apps/desktop tauri dev
+```
+
+The existing CLI remains available:
 
 ```bash
 cargo run -p halquen-cli --bin halquen -- health
-cargo run -p halquen-cli --bin halquen -- capabilities list
-cargo run -p halquen-cli --bin halquen -- capability get system.open_app
-cargo run -p halquen-cli --bin halquen -- evaluate open-app app:telegram
-cargo run -p halquen-cli --bin halquen -- dry-run open-app app:telegram
+cargo run -p halquen-cli --bin halquen -- chat "Open Telegram"
 cargo run -p halquen-cli --bin halquen -- memory stats
 cargo run -p halquen-cli --bin halquen -- audit stats
 ```
 
-`system.open_app` is classified as a non-reversible local side effect. `dry-run open-app` records a
-simulated result; it does not launch an application.
+`system.open_app` currently uses the safe dry-run executor. Halquen returns and audits a simulated
+result; it does not launch an application.
 
-Persistent data is stored at `$XDG_DATA_HOME/halquen/halquen.sqlite3`, falling back to
-`$HOME/.local/share/halquen/halquen.sqlite3`. Runtime IPC uses
-`$XDG_RUNTIME_DIR/halquen/halquen.sock` and never opens a TCP port.
+## Local data
+
+- SQLite: `$XDG_DATA_HOME/halquen/halquen.sqlite3`, falling back to
+  `$HOME/.local/share/halquen/halquen.sqlite3`.
+- IPC: `$XDG_RUNTIME_DIR/halquen/halquen.sock`; no TCP control listener is opened.
+- Logs: `$XDG_STATE_HOME/halquen/logs`, falling back to `$HOME/.local/state/halquen/logs`.
+- Provider secrets: the operating-system credential service under `halquen.ai-provider`. SQLite
+  stores only an opaque credential ID. If the keyring is unavailable, credential operations fail;
+  there is no plaintext fallback.
 
 ## Verification
 
 ```bash
+cargo fmt --all --check
 cargo check --workspace --all-targets --all-features --locked
 cargo test --workspace --all-features --locked
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo fmt --all --check
+pnpm --dir apps/desktop typecheck
+pnpm --dir apps/desktop test
+pnpm --dir apps/desktop build
+pnpm --dir apps/desktop tauri build --no-bundle
+git diff --check
 cargo audit
 cargo deny check
 ```
 
-`cargo fmt`, `cargo clippy`, `cargo audit`, and `cargo deny` require their respective tools to be
-installed; the project does not install global tools automatically. The `permission_grants` schema
-is reserved for a future design and no persistent grant is currently loaded or honored.
+The optional Cargo tools and `rustfmt` must be installed by the development environment; the project
+does not install global binaries automatically.
 
-See [the core walkthrough](docs/core-walkthrough.md), [architecture](docs/architecture.md), and
-[security boundaries](docs/security.md) for implementation details and current limitations.
+See [architecture](docs/architecture.md), [security](docs/security.md), and the
+[core walkthrough](docs/core-walkthrough.md) for the implemented boundaries and known limitations.

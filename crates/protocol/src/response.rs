@@ -1,7 +1,17 @@
 use halquen_audit::ExecutionReceipt;
-use halquen_domain::CapabilityDescriptor;
+use halquen_domain::{
+    ActivityEvent, AiModel, ApplicationSettings, CapabilityDescriptor, ChatMessage, ChatSession,
+    Provider, UsageStats,
+};
 use halquen_policy::PolicyDecision;
 use serde::{Deserialize, Serialize};
+
+use halquen_memory::{MemoryRevisionView, MemoryView};
+
+use crate::{
+    ChatResult, ConfirmationResult, DiagnosticsSnapshot, MemoryMutationReceipt, PromptPreview,
+    ProviderTestStatus,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResponseEnvelope {
@@ -28,6 +38,27 @@ pub enum ProtocolResponse {
         unknown_cases: u64,
     },
     AuditStats { records: u64, executions: u64 },
+    Chat { result: ChatResult },
+    ChatSessions { sessions: Vec<ChatSession> },
+    ChatMessages { messages: Vec<ChatMessage> },
+    Activity { events: Vec<ActivityEvent> },
+    MemoryItems { items: Vec<MemoryView> },
+    MemoryHistory { revisions: Vec<MemoryRevisionView> },
+    MemoryUpdated { updated: bool },
+    MemoryMutation { receipt: MemoryMutationReceipt },
+    Providers { providers: Vec<Provider> },
+    ProviderSaved { provider: Provider },
+    ProviderRemoved { removed: bool },
+    ProviderTest { result: ProviderTestStatus },
+    Models { models: Vec<AiModel> },
+    ModelSaved { model: AiModel },
+    ApplicationSettings { settings: ApplicationSettings },
+    SettingsUpdated { settings: ApplicationSettings },
+    UsageStats { stats: UsageStats },
+    Diagnostics { snapshot: DiagnosticsSnapshot },
+    FeedbackRecorded,
+    Confirmation { result: ConfirmationResult },
+    AiRequestPreview { preview: PromptPreview },
     Error { error: ProtocolErrorBody },
 }
 
@@ -53,4 +84,9 @@ pub enum ProtocolErrorCode {
     NotFound,
     Unsupported,
     Internal,
+    Validation,
+    PrivacyDenied,
+    ProviderUnavailable,
+    SecretStoreUnavailable,
+    ConfirmationExpired,
 }

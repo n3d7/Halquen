@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use halquen_audit::{
@@ -6,7 +8,11 @@ use halquen_audit::{
 use halquen_capabilities::{
     CapabilityRegistry, ExecutionResultCode, Executor, open_app_descriptor,
 };
-use halquen_domain::{AuditId, CapabilityDescriptor, ExecutionId};
+use halquen_ai::{
+    DisabledProviderClient, KeyringSecretStore, OpenAiCompatibleClient, ProviderClient,
+    SecretStore,
+};
+use halquen_domain::{ActionRequest, AuditId, CapabilityDescriptor, DiagnosticEntry, ExecutionId};
 use halquen_policy::{PolicyEngine, PolicyOutcome};
 use halquen_protocol::{
     HealthStatus, PROTOCOL_VERSION, ProtocolErrorBody, ProtocolErrorCode, ProtocolRequest,
@@ -16,10 +22,27 @@ use halquen_storage::Database;
 use tokio::time::timeout;
 
 pub struct HalquenService<E> {
-    registry: CapabilityRegistry,
-    policy: PolicyEngine,
-    executor: E,
-    database: Database,
+    pub(crate) registry: CapabilityRegistry,
+    pub(crate) policy: PolicyEngine,
+    pub(crate) executor: E,
+    pub(crate) database: Database,
+    pub(crate) provider_client: Arc<dyn ProviderClient>,
+    pub(crate) secret_store: Arc<dyn SecretStore>,
+    pub(crate) pending_confirmations: BTreeMap<String, PendingConfirmation>,
+    pub(crate) diagnostics: VecDeque<DiagnosticEntry>,
+    pub(crate) environment: ServiceEnvironment,
+}
+
+pub(crate) struct PendingConfirmation {
+    pub action: ActionRequest,
+    pub title: String,
+    pub expires_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ServiceEnvironment {
+    pub database_path: String,
+    pub runtime_socket: String,
 }
 
 impl<E: Executor> HalquenService<E> {
@@ -31,6 +54,11 @@ impl<E: Executor> HalquenService<E> {
             policy: PolicyEngine::new(),
             executor,
             database,
+            provider_client: Arc::new(OpenAiCompatibleClient::new()?),
+            secret_store: Arc::new(KeyringSecretStore::new("halquen.ai-provider")),
+            pending_confirmations: BTreeMap::new(),
+            diagnostics: VecDeque::with_capacity(200),
+            environment: ServiceEnvironment::default(),
         })
     }
 
@@ -45,7 +73,19 @@ impl<E: Executor> HalquenService<E> {
             policy,
             executor,
             database,
+            provider_client: Arc::new(DisabledProviderClient),
+            secret_store: Arc::new(KeyringSecretStore::new("halquen.ai-provider")),
+            pending_confirmations: BTreeMap::new(),
+            diagnostics: VecDeque::with_capacity(200),
+            environment: ServiceEnvironment::default(),
         }
+    }
+
+    pub fn set_environment(&mut self, database_path: String, runtime_socket: String) {
+        self.environment = ServiceEnvironment {
+            database_path,
+            runtime_socket,
+        };
     }
 
     pub fn database(&self) -> &Database {
@@ -68,6 +108,42 @@ impl<E: Executor> HalquenService<E> {
             ProtocolRequest::DryRunAction { action } => self.dry_run_action(action).await,
             ProtocolRequest::MemoryStats => self.memory_stats(),
             ProtocolRequest::AuditStats => self.audit_stats(),
+            ProtocolRequest::Chat { request } => self.chat(request, &request_id).await,
+            ProtocolRequest::ListChatSessions { limit } => self.list_chat_sessions(limit),
+            ProtocolRequest::ListChatMessages { session_id, limit } => {
+                self.list_chat_messages(&session_id, limit)
+            }
+            ProtocolRequest::ListActivity { limit } => self.list_activity(limit),
+            ProtocolRequest::ListMemory { query } => self.list_memory(query),
+            ProtocolRequest::GetMemoryHistory { memory_id } => self.memory_history(&memory_id),
+            ProtocolRequest::UpdateMemoryState { update } => self.update_memory_state(update),
+            ProtocolRequest::RestoreMemoryRevision {
+                memory_id,
+                revision_id,
+            } => self.restore_memory_revision(&memory_id, &revision_id),
+            ProtocolRequest::ListProviders => self.list_providers(),
+            ProtocolRequest::UpsertProvider { provider } => self.upsert_provider(provider),
+            ProtocolRequest::RemoveProvider { provider_id } => self.remove_provider(&provider_id),
+            ProtocolRequest::TestProvider { provider_id } => {
+                self.test_provider(&provider_id).await
+            }
+            ProtocolRequest::ListModels => self.list_models(),
+            ProtocolRequest::UpsertModel { model } => self.upsert_model(model),
+            ProtocolRequest::GetApplicationSettings => self.application_settings(),
+            ProtocolRequest::UpdateApplicationSettings { settings } => {
+                self.update_application_settings(settings)
+            }
+            ProtocolRequest::GetUsageStats => self.usage_stats(),
+            ProtocolRequest::GetDiagnostics { limit } => self.diagnostics(limit),
+            ProtocolRequest::SubmitResponseFeedback {
+                cache_entry_id,
+                feedback,
+            } => self.submit_response_feedback(&cache_entry_id, feedback),
+            ProtocolRequest::ConfirmAction {
+                confirmation_id,
+                allow,
+            } => self.confirm_action(&confirmation_id, allow).await,
+            ProtocolRequest::PreviewAiRequest { request } => self.preview_ai_request(request),
         }
         .unwrap_or_else(|error| ProtocolResponse::Error { error });
 
@@ -126,7 +202,7 @@ impl<E: Executor> HalquenService<E> {
         })
     }
 
-    async fn dry_run_action(
+    pub(crate) async fn dry_run_action(
         &mut self,
         action: halquen_domain::ActionRequest,
     ) -> Result<ProtocolResponse, ProtocolErrorBody> {
@@ -270,7 +346,7 @@ impl<E: Executor> HalquenService<E> {
         })
     }
 
-    fn descriptor_for(
+    pub(crate) fn descriptor_for(
         &self,
         action: &halquen_domain::ActionRequest,
     ) -> Result<&CapabilityDescriptor, ProtocolErrorBody> {
@@ -290,7 +366,7 @@ impl<E: Executor> HalquenService<E> {
     }
 }
 
-fn internal_error(error: impl std::fmt::Display) -> ProtocolErrorBody {
+pub(crate) fn internal_error(error: impl std::fmt::Display) -> ProtocolErrorBody {
     let _ = error;
     ProtocolErrorBody {
         code: ProtocolErrorCode::Internal,
@@ -298,7 +374,7 @@ fn internal_error(error: impl std::fmt::Display) -> ProtocolErrorBody {
     }
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| {

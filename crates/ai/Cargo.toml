@@ -6,7 +6,6 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-futures-util = { workspace = true }
 halquen-domain = { version = "0.1.0", path = "../domain" }
 keyring = { workspace = true }
 reqwest = { workspace = true }
@@ -15,6 +14,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }
 zeroize = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
 
 [lints]
 workspace = true

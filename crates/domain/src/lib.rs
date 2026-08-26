@@ -33,8 +33,8 @@ pub use ids::{
 pub use intent::{AiProposal, Intent, ProposalPayload, ProposalStatus};
 pub use interaction::{
     ActivityEvent, ActivityKind, AiModel, AiTaskType, AppearanceMode, ApplicationSettings,
-    ChatMessage, ChatOrigin, ChatRole, ChatRoute, ChatSession, ContextCategory, DiagnosticEntry,
-    DiagnosticSeverity, LogLevel, ModelSelection, PrivacyClass, Provider, ProviderKind,
-    ProviderStatus, ResponseFeedback, RoutingPreset, UsageStats,
+    CachedResponse, ChatMessage, ChatOrigin, ChatRole, ChatRoute, ChatSession, ContextCategory,
+    DiagnosticEntry, DiagnosticSeverity, LogLevel, ModelSelection, PrivacyClass, Provider,
+    ProviderKind, ProviderStatus, ResponseFeedback, RoutingPreset, UsageStats,
 };
 pub use trust::TrustClass;

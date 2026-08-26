@@ -5,6 +5,7 @@ use thiserror::Error;
 
 pub mod paths;
 pub mod sqlite;
+mod interaction;
 
 pub use paths::DataPaths;
 pub use sqlite::Database;
@@ -41,6 +42,8 @@ pub enum StorageError {
     },
     #[error("invalid memory change: {0}")]
     InvalidMemoryChange(String),
+    #[error("invalid interaction state: {0}")]
+    InvalidInteraction(String),
     #[error("invalid internal static query")]
     InvalidStaticQuery,
     #[error("database error: {0}")]

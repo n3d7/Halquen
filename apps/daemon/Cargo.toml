@@ -7,16 +7,25 @@ publish = false
 
 [dependencies]
 halquen-audit = { version = "0.1.0", path = "../../crates/audit" }
+halquen-ai = { version = "0.1.0", path = "../../crates/ai" }
 halquen-capabilities = { version = "0.1.0", path = "../../crates/capabilities" }
 halquen-domain = { version = "0.1.0", path = "../../crates/domain" }
+halquen-memory = { version = "0.1.0", path = "../../crates/memory" }
 halquen-policy = { version = "0.1.0", path = "../../crates/policy" }
 halquen-protocol = { version = "0.1.0", path = "../../crates/protocol" }
 halquen-storage = { version = "0.1.0", path = "../../crates/storage" }
+zeroize = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lib]
 path = "src/lib.rs"
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

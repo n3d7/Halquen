@@ -7,14 +7,22 @@ use thiserror::Error;
 pub mod request;
 pub mod response;
 pub mod transport;
+pub mod interaction;
+pub mod client;
 
 pub use request::{ProtocolRequest, RequestEnvelope};
 pub use response::{
     HealthStatus, ProtocolErrorBody, ProtocolErrorCode, ProtocolResponse, ResponseEnvelope,
 };
+pub use interaction::{
+    ChatRequest, ChatResult, ConfirmationPrompt, ConfirmationResult, DiagnosticsSnapshot,
+    MemoryMutationReceipt, MemoryQuery, MemoryStateUpdate, ModelUpsert, PromptPreview,
+    ProviderTestStatus, ProviderUpsert,
+};
 pub use transport::{RuntimePathError, RuntimePaths};
+pub use client::{ClientError, DaemonClient};
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 pub const MAX_FRAME_SIZE: usize = 64 * 1024;
 
 #[derive(Debug, Error)]
@@ -164,5 +172,34 @@ mod tests {
         };
         let bytes = encode_response(&response).unwrap();
         assert_eq!(decode_response(&bytes).unwrap(), response);
+    }
+
+    #[test]
+    fn gui_chat_request_round_trip_preserves_manual_model_selection() {
+        let model_id = halquen_domain::ModelId::generate();
+        let request = RequestEnvelope {
+            version: PROTOCOL_VERSION,
+            request_id: "request:gui-chat".to_owned(),
+            request: ProtocolRequest::Chat {
+                request: ChatRequest {
+                    session_id: None,
+                    message: "Explain the local route".to_owned(),
+                    model_selection: halquen_domain::ModelSelection::Model {
+                        model_id: model_id.clone(),
+                    },
+                },
+            },
+        };
+        let decoded = decode_request(&encode_request(&request).unwrap()).unwrap();
+        assert_eq!(decoded, request);
+        assert!(matches!(
+            decoded.request,
+            ProtocolRequest::Chat {
+                request: ChatRequest {
+                    model_selection: halquen_domain::ModelSelection::Model { model_id: id },
+                    ..
+                }
+            } if id == model_id
+        ));
     }
 }

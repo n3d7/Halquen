@@ -14,14 +14,21 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::{AuditStats, MemoryStats, StorageError, paths::current_uid};
 
-const MIGRATIONS: &[(i64, &str, &str)] = &[(
-    1,
-    "initial deterministic core",
-    include_str!("../../../migrations/0001_initial.sql"),
-)];
+const MIGRATIONS: &[(i64, &str, &str)] = &[
+    (
+        1,
+        "initial deterministic core",
+        include_str!("../../../migrations/0001_initial.sql"),
+    ),
+    (
+        2,
+        "desktop interaction and AI control plane",
+        include_str!("../../../migrations/0002_desktop_interaction.sql"),
+    ),
+];
 
 pub struct Database {
-    connection: Connection,
+    pub(crate) connection: Connection,
 }
 
 impl Database {
@@ -784,12 +791,12 @@ mod tests {
     #[test]
     fn fresh_database_runs_migration_and_enables_foreign_keys() {
         let database = Database::open_in_memory().unwrap();
-        assert_eq!(database.schema_version().unwrap(), 1);
+        assert_eq!(database.schema_version().unwrap(), 2);
         assert!(database.foreign_keys_enabled().unwrap());
     }
 
     #[test]
-    fn file_database_reopens_with_wal_busy_timeout_and_single_migration() {
+    fn file_database_reopens_with_wal_busy_timeout_and_all_migrations_once() {
         let path = TempDatabasePath::new();
         {
             let database = Database::open(&path.database).unwrap();
@@ -803,7 +810,7 @@ mod tests {
                 .unwrap();
             assert_eq!(journal.to_ascii_lowercase(), "wal");
             assert_eq!(busy_ms, 5_000);
-            assert_eq!(database.schema_version().unwrap(), 1);
+            assert_eq!(database.schema_version().unwrap(), 2);
         }
         {
             let database = Database::open(&path.database).unwrap();
@@ -811,7 +818,7 @@ mod tests {
                 .connection
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
                 .unwrap();
-            assert_eq!(migrations, 1);
+            assert_eq!(migrations, 2);
         }
         assert_eq!(
             fs::metadata(&path.database)
@@ -886,7 +893,7 @@ mod tests {
             .connection
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
     }
 
     #[test]

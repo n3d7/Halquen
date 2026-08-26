@@ -27,6 +27,7 @@ pub enum PolicyReason {
     MissingScope { scope: ScopeRequirement },
     InvalidDescriptor,
     InvalidActionContract,
+    UserConfirmedOnce,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -39,20 +39,30 @@ pub enum DaemonError {
     IncompleteFrame,
     #[error("failed to initialize core: {0}")]
     Initialization(String),
+    #[error("failed to initialize operational logging: {0}")]
+    Logging(String),
 }
 
 pub async fn run() -> Result<(), DaemonError> {
     let data_paths = DataPaths::discover()?;
     data_paths.prepare()?;
     let database = Database::open(&data_paths.database)?;
+    let settings = database.application_settings()?;
+    let _log_guard = crate::logging::initialize(&settings)
+        .map_err(|error| DaemonError::Logging(error.to_string()))?;
     let mut service = HalquenService::new(DryRunExecutor::new(), database)
         .map_err(|error| DaemonError::Initialization(error.to_string()))?;
 
     let runtime_paths = RuntimePaths::discover()?;
+    service.set_environment(
+        data_paths.database.display().to_string(),
+        runtime_paths.socket.display().to_string(),
+    );
     runtime_paths.prepare_server()?;
     let listener = UnixListener::bind(&runtime_paths.socket)?;
     runtime_paths.secure_bound_socket()?;
     let _socket_guard = SocketGuard::new(runtime_paths.socket.clone());
+    tracing::info!(component = "daemon", "Halquen daemon is ready");
     let shutdown = tokio::signal::ctrl_c();
     tokio::pin!(shutdown);
 
@@ -60,12 +70,18 @@ pub async fn run() -> Result<(), DaemonError> {
         tokio::select! {
             signal = &mut shutdown => {
                 signal?;
+                tracing::info!(component = "daemon", "Halquen daemon is stopping");
                 break;
             }
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
                 if let Err(error) = handle_connection(stream, &mut service).await {
-                    eprintln!("halquen-daemon: rejected local request: {error}");
+                    tracing::warn!(
+                        component = "ipc",
+                        error_code = "request_rejected",
+                        "Rejected a local IPC request: {}",
+                        crate::logging::redact(&error.to_string())
+                    );
                 }
             }
         }

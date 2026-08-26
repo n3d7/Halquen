@@ -12,10 +12,12 @@ path = "src/lib.rs"
 [dependencies]
 halquen-audit = { version = "0.1.0", path = "../audit" }
 halquen-domain = { version = "0.1.0", path = "../domain" }
+halquen-memory = { version = "0.1.0", path = "../memory" }
 halquen-policy = { version = "0.1.0", path = "../policy" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 
 [lints]
 workspace = true

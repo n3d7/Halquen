@@ -1,6 +1,11 @@
 # Rust cargo
 /target/
 
+# Desktop frontend build artifacts
+/apps/desktop/node_modules/
+/apps/desktop/dist/
+*.tsbuildinfo
+
 # db
 *.db
 *.db-shm

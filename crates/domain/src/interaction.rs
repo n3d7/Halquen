@@ -260,6 +260,27 @@ pub struct ChatMessage {
     pub created_at_ms: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedResponse {
+    pub id: CacheEntryId,
+    pub normalized_request: String,
+    pub response: String,
+    pub context_key: String,
+    pub confidence_permille: u16,
+    pub priority_permille: u16,
+    pub trust: crate::TrustClass,
+    pub valid_until_ms: Option<i64>,
+    pub reusable: bool,
+    pub created_at_ms: i64,
+    pub last_used_at_ms: Option<i64>,
+    pub usage_count: u64,
+    pub success_count: u64,
+    pub correction_count: u64,
+    pub original_provider_id: Option<ProviderId>,
+    pub original_model_id: Option<ModelId>,
+    pub estimated_tokens_avoided: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityKind {

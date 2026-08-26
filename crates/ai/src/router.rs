@@ -177,6 +177,25 @@ mod tests {
     }
 
     #[test]
+    fn zero_model_call_budget_disables_ai_before_route_selection() {
+        let provider = provider(PrivacyClass::Local);
+        let model = model(&provider);
+        let mut settings = ApplicationSettings::default();
+        settings.max_model_calls_per_request = 0;
+        let result = ModelRouter.select(
+            &settings,
+            &[provider],
+            &[model],
+            &RouteRequest {
+                task: AiTaskType::Conversation,
+                selection: ModelSelection::Automatic,
+                contains_personal_context: false,
+            },
+        );
+        assert_eq!(result, Err(RouteError::AiDisabled));
+    }
+
+    #[test]
     fn prefer_local_routes_to_local_provider() {
         let local = provider(PrivacyClass::Local);
         let cloud = provider(PrivacyClass::Cloud);
