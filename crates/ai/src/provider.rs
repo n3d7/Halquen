@@ -16,8 +16,7 @@ pub fn validate_provider(provider: &Provider) -> Result<(), AiError> {
     endpoint(provider, "models").map(|_| ())
 }
 
-pub type ProviderFuture<'a, T> =
-    Pin<Box<dyn Future<Output = Result<T, AiError>> + Send + 'a>>;
+pub type ProviderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AiError>> + Send + 'a>>;
 
 pub trait ProviderClient: Send + Sync {
     fn complete<'a>(
@@ -87,8 +86,8 @@ impl ProviderClient for OpenAiCompatibleClient {
         Box::pin(async move {
             ensure_supported(provider.kind)?;
             let endpoint = endpoint(provider, "chat/completions")?;
-            let context = serde_json::to_string(&request.context)
-                .map_err(|_| AiError::InvalidResponse)?;
+            let context =
+                serde_json::to_string(&request.context).map_err(|_| AiError::InvalidResponse)?;
             let mut builder = self.client.post(endpoint).json(&ChatCompletionRequest {
                 model: model.provider_model_id.clone(),
                 messages: vec![
@@ -112,7 +111,10 @@ impl ProviderClient for OpenAiCompatibleClient {
             if let Some(secret) = credential {
                 builder = builder.bearer_auth(secret);
             }
-            let response = builder.send().await.map_err(|_| AiError::EndpointUnavailable)?;
+            let response = builder
+                .send()
+                .await
+                .map_err(|_| AiError::EndpointUnavailable)?;
             ensure_success(response.status())?;
             let body = bounded_body(response).await?;
             let parsed: ChatCompletionResponse =
@@ -143,7 +145,10 @@ impl ProviderClient for OpenAiCompatibleClient {
             if let Some(secret) = credential {
                 builder = builder.bearer_auth(secret);
             }
-            let response = builder.send().await.map_err(|_| AiError::EndpointUnavailable)?;
+            let response = builder
+                .send()
+                .await
+                .map_err(|_| AiError::EndpointUnavailable)?;
             ensure_success(response.status())?;
             Ok(ProviderTestResult {
                 reachable: true,
@@ -169,7 +174,11 @@ fn ensure_supported(kind: ProviderKind) -> Result<(), AiError> {
 
 fn endpoint(provider: &Provider, suffix: &str) -> Result<Url, AiError> {
     let mut base = Url::parse(&provider.base_url).map_err(|_| AiError::InvalidEndpoint)?;
-    if base.username() != "" || base.password().is_some() || base.query().is_some() || base.fragment().is_some() {
+    if base.username() != ""
+        || base.password().is_some()
+        || base.query().is_some()
+        || base.fragment().is_some()
+    {
         return Err(AiError::InvalidEndpoint);
     }
     match base.scheme() {
@@ -305,15 +314,45 @@ mod tests {
 
     #[test]
     fn local_http_is_limited_to_loopback_and_cloud_requires_tls() {
-        assert!(endpoint(&provider("http://127.0.0.1:11434/v1", PrivacyClass::Local), "models").is_ok());
-        assert!(endpoint(&provider("http://example.com/v1", PrivacyClass::Local), "models").is_err());
-        assert!(endpoint(&provider("http://example.com/v1", PrivacyClass::Cloud), "models").is_err());
-        assert!(endpoint(&provider("https://example.com/v1", PrivacyClass::Cloud), "models").is_ok());
+        assert!(
+            endpoint(
+                &provider("http://127.0.0.1:11434/v1", PrivacyClass::Local),
+                "models"
+            )
+            .is_ok()
+        );
+        assert!(
+            endpoint(
+                &provider("http://example.com/v1", PrivacyClass::Local),
+                "models"
+            )
+            .is_err()
+        );
+        assert!(
+            endpoint(
+                &provider("http://example.com/v1", PrivacyClass::Cloud),
+                "models"
+            )
+            .is_err()
+        );
+        assert!(
+            endpoint(
+                &provider("https://example.com/v1", PrivacyClass::Cloud),
+                "models"
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn credentials_embedded_in_urls_are_rejected() {
-        assert!(endpoint(&provider("https://user:secret@example.com/v1", PrivacyClass::Cloud), "models").is_err());
+        assert!(
+            endpoint(
+                &provider("https://user:secret@example.com/v1", PrivacyClass::Cloud),
+                "models"
+            )
+            .is_err()
+        );
     }
 
     #[tokio::test]
@@ -328,14 +367,11 @@ mod tests {
                 let read = stream.read(&mut chunk).await.unwrap();
                 assert!(read > 0);
                 request.extend_from_slice(&chunk[..read]);
-                let Some(header_end) = request
-                    .windows(4)
-                    .position(|value| value == b"\r\n\r\n")
+                let Some(header_end) = request.windows(4).position(|value| value == b"\r\n\r\n")
                 else {
                     continue;
                 };
-                let headers =
-                    String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
+                let headers = String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
                 let content_length = headers
                     .lines()
                     .find_map(|line| line.strip_prefix("content-length:"))

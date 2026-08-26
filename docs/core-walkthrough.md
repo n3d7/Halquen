@@ -4,7 +4,7 @@
 
 For `Open Telegram` in Chat:
 
-1. The GUI sends a typed protocol-v2 `ChatRequest` through the Tauri bridge and private Unix socket.
+1. The GUI sends a typed protocol-v3 `ChatRequest` through the Tauri bridge and private Unix socket.
 2. The daemon persists the user message and a structured request activity event.
 3. The deterministic parser resolves `system.open_app` and constructs typed `OpenApp` arguments.
 4. The trusted registry validates the argument shape and policy returns `Allow`, `Confirm`, or
@@ -54,15 +54,17 @@ model.
 
 ## Desktop controls
 
-- Chat supports conversation history, Automatic/manual model selection, confirmation, feedback,
-  sanitized errors, and a privacy-oriented AI request preview.
+- Chat supports conversation history, Automatic/manual model selection, confirmation, all response
+  feedback states, cancellable in-flight provider calls, sanitized errors, and a privacy-oriented AI
+  request preview.
 - Memory supports bounded search/filtering, evidence/trust metadata, pin/disable, and immutable
   revision history/restoration.
 - AI supports provider/key setup, connection tests, model setup/defaults, privacy-aware routing
   settings, managed/personal prompt separation, and usage/estimated-efficiency metrics.
-- Activity explains routes and outcomes; Diagnostics shows protocol/schema/paths/provider state and
-  recent sanitized entries; Settings persists validated appearance, privacy, budgets, learning,
-  retention, and logging controls.
+- Activity explains routes and outcomes; Diagnostics shows protocol/schema/paths/provider state,
+  recent sanitized entries, and safely clears historical logs while preserving the active log and
+  audit records; Settings persists validated appearance, privacy, budgets, learning, retention, and
+  logging controls.
 
 All lists are bounded and refreshed on screen entry or explicit user action. There are no busy loops,
 short polling intervals, background model calls, or renderer-owned business rules.

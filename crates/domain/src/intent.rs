@@ -23,14 +23,25 @@ pub enum ProposalStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProposalPayload {
-    Alias { entity_id: EntityId, alias: String },
+    Alias {
+        entity_id: EntityId,
+        alias: String,
+    },
     IntentInterpretation {
         intent_id: IntentId,
         capability_id: CapabilityId,
     },
-    MemoryUpdate { memory_id: MemoryId, summary: String },
-    Routine { name: String, steps: Vec<ActionRequest> },
-    Plan { actions: Vec<ActionRequest> },
+    MemoryUpdate {
+        memory_id: MemoryId,
+        summary: String,
+    },
+    Routine {
+        name: String,
+        steps: Vec<ActionRequest>,
+    },
+    Plan {
+        actions: Vec<ActionRequest>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

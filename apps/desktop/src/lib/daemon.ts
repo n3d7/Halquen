@@ -21,7 +21,10 @@ import type {
 
 export const daemon = {
   health: () => invoke<Health>("get_health"),
-  sendChat: (input: ChatRequest) => invoke<ChatResult>("send_chat_message", { input }),
+  sendChat: (requestId: string, input: ChatRequest) =>
+    invoke<ChatResult>("send_chat_message", { requestId, input }),
+  cancelChat: (requestId: string) =>
+    invoke<boolean>("cancel_chat_message", { requestId }),
   chatSessions: (limit = 100) => invoke<ChatSession[]>("list_chat_sessions", { limit }),
   chatMessages: (sessionId: Id, limit = 200) =>
     invoke<ChatMessage[]>("list_chat_messages", { sessionId, limit }),
@@ -58,6 +61,7 @@ export const daemon = {
     invoke<ApplicationSettings>("update_application_settings", { settings }),
   usage: () => invoke<UsageStats>("get_usage_stats"),
   diagnostics: (limit = 100) => invoke<DiagnosticsSnapshot>("get_diagnostics", { limit }),
+  clearOperationalLogs: () => invoke<number>("clear_operational_logs"),
   feedback: (cacheEntryId: Id, feedback: "useful" | "wrong" | "do_not_remember" | "always_use" | "prefer") =>
     invoke<void>("submit_response_feedback", { cacheEntryId, feedback }),
   confirm: (confirmationId: string, allow: boolean) =>

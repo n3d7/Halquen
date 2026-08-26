@@ -24,8 +24,14 @@ pub enum MemoryValue {
         relation: String,
         to: EntityId,
     },
-    Preference { key: String, value: String },
-    Procedure { name: String, capability_ids: Vec<String> },
+    Preference {
+        key: String,
+        value: String,
+    },
+    Procedure {
+        name: String,
+        capability_ids: Vec<String>,
+    },
 }
 
 impl MemoryValue {
@@ -130,7 +136,10 @@ impl MemoryLedger {
         now_ms: i64,
     ) -> Result<MemoryRevisionId, MemoryError> {
         require_evidence(&evidence_ids)?;
-        let item = self.items.get_mut(memory_id).ok_or(MemoryError::ItemNotFound)?;
+        let item = self
+            .items
+            .get_mut(memory_id)
+            .ok_or(MemoryError::ItemNotFound)?;
         require_kind(item.kind, &value)?;
         let revision_id = MemoryRevisionId::generate();
         self.revisions.insert(
@@ -216,7 +225,12 @@ mod tests {
         let mut ledger = MemoryLedger::new();
         let first_evidence = EvidenceId::generate();
         let memory_id = ledger
-            .create(MemoryKind::Semantic, preference("VS Code"), vec![first_evidence], 1)
+            .create(
+                MemoryKind::Semantic,
+                preference("VS Code"),
+                vec![first_evidence],
+                1,
+            )
             .unwrap();
         let first_revision = ledger.item(&memory_id).unwrap().current_revision_id.clone();
         let second_revision = ledger
@@ -229,7 +243,11 @@ mod tests {
             .unwrap();
         assert_eq!(ledger.revisions_for(&memory_id).len(), 2);
         assert_eq!(
-            ledger.revision(&second_revision).unwrap().previous_revision_id.as_ref(),
+            ledger
+                .revision(&second_revision)
+                .unwrap()
+                .previous_revision_id
+                .as_ref(),
             Some(&first_revision)
         );
         assert!(ledger.revision(&first_revision).is_some());
@@ -260,7 +278,10 @@ mod tests {
             .unwrap();
         assert_ne!(restored, first);
         assert_eq!(ledger.revisions_for(&memory_id).len(), 3);
-        assert_eq!(ledger.revision(&restored).unwrap().value, preference("VS Code"));
+        assert_eq!(
+            ledger.revision(&restored).unwrap().value,
+            preference("VS Code")
+        );
     }
 
     #[test]
@@ -306,12 +327,7 @@ mod tests {
             capability_ids: vec!["system.open_app".to_owned()],
         };
         assert_eq!(
-            ledger.revise(
-                &memory_id,
-                procedure,
-                vec![EvidenceId::generate()],
-                2,
-            ),
+            ledger.revise(&memory_id, procedure, vec![EvidenceId::generate()], 2,),
             Err(MemoryError::KindMismatch)
         );
         assert_eq!(ledger.revisions_for(&memory_id).len(), 1);

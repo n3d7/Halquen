@@ -215,7 +215,12 @@ mod tests {
         fs::write(&target, b"").unwrap();
         symlink(&target, &paths.socket).unwrap();
         assert!(paths.prepare_server().is_err());
-        assert!(fs::symlink_metadata(&paths.socket).unwrap().file_type().is_symlink());
+        assert!(
+            fs::symlink_metadata(&paths.socket)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]

@@ -60,8 +60,7 @@ impl ProceduralPromotionValidator {
             supplied[id]
                 .trust
                 .independently_authorizes_procedural_memory()
-        })
-        {
+        }) {
             PromotionDecision::EligibleForPolicyReview
         } else {
             PromotionDecision::InsufficientIndependentAuthority
@@ -71,9 +70,7 @@ impl ProceduralPromotionValidator {
 
 #[cfg(test)]
 mod tests {
-    use halquen_domain::{
-        ActionArguments, ActionRequest, CapabilityId, EvidenceId, TrustClass,
-    };
+    use halquen_domain::{ActionArguments, ActionRequest, CapabilityId, EvidenceId, TrustClass};
 
     use super::*;
 
@@ -116,10 +113,7 @@ mod tests {
         for trust in [TrustClass::UserExplicit, TrustClass::UserConfirmedResult] {
             let item = evidence(trust);
             assert_eq!(
-                ProceduralPromotionValidator.evaluate(
-                    &candidate(vec![item.id.clone()]),
-                    &[item],
-                ),
+                ProceduralPromotionValidator.evaluate(&candidate(vec![item.id.clone()]), &[item],),
                 PromotionDecision::EligibleForPolicyReview
             );
         }

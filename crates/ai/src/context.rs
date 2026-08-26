@@ -30,7 +30,7 @@ impl ContextBuilder {
     }
 
     pub fn build(&self, mut candidates: Vec<ContextItem>) -> ContextProjection {
-        candidates.sort_by(|left, right| right.priority.cmp(&left.priority));
+        candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.priority));
         let mut items = Vec::new();
         let mut estimated_tokens = 0_u32;
         let mut truncated = false;

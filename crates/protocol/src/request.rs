@@ -18,36 +18,78 @@ pub struct RequestEnvelope {
 pub enum ProtocolRequest {
     Health,
     ListCapabilities,
-    GetCapability { capability_id: CapabilityId },
-    EvaluateAction { action: ActionRequest },
-    DryRunAction { action: ActionRequest },
+    GetCapability {
+        capability_id: CapabilityId,
+    },
+    EvaluateAction {
+        action: ActionRequest,
+    },
+    DryRunAction {
+        action: ActionRequest,
+    },
     MemoryStats,
     AuditStats,
-    Chat { request: ChatRequest },
-    ListChatSessions { limit: u16 },
-    ListChatMessages { session_id: ChatSessionId, limit: u16 },
-    ListActivity { limit: u16 },
-    ListMemory { query: MemoryQuery },
-    GetMemoryHistory { memory_id: MemoryId },
-    UpdateMemoryState { update: MemoryStateUpdate },
+    Chat {
+        request: ChatRequest,
+    },
+    CancelChat {
+        request_id: String,
+    },
+    ListChatSessions {
+        limit: u16,
+    },
+    ListChatMessages {
+        session_id: ChatSessionId,
+        limit: u16,
+    },
+    ListActivity {
+        limit: u16,
+    },
+    ListMemory {
+        query: MemoryQuery,
+    },
+    GetMemoryHistory {
+        memory_id: MemoryId,
+    },
+    UpdateMemoryState {
+        update: MemoryStateUpdate,
+    },
     RestoreMemoryRevision {
         memory_id: MemoryId,
         revision_id: MemoryRevisionId,
     },
     ListProviders,
-    UpsertProvider { provider: ProviderUpsert },
-    RemoveProvider { provider_id: ProviderId },
-    TestProvider { provider_id: ProviderId },
+    UpsertProvider {
+        provider: ProviderUpsert,
+    },
+    RemoveProvider {
+        provider_id: ProviderId,
+    },
+    TestProvider {
+        provider_id: ProviderId,
+    },
     ListModels,
-    UpsertModel { model: ModelUpsert },
+    UpsertModel {
+        model: ModelUpsert,
+    },
     GetApplicationSettings,
-    UpdateApplicationSettings { settings: ApplicationSettings },
+    UpdateApplicationSettings {
+        settings: ApplicationSettings,
+    },
     GetUsageStats,
-    GetDiagnostics { limit: u16 },
+    GetDiagnostics {
+        limit: u16,
+    },
+    ClearOperationalLogs,
     SubmitResponseFeedback {
         cache_entry_id: CacheEntryId,
         feedback: ResponseFeedback,
     },
-    ConfirmAction { confirmation_id: String, allow: bool },
-    PreviewAiRequest { request: ChatRequest },
+    ConfirmAction {
+        confirmation_id: String,
+        allow: bool,
+    },
+    PreviewAiRequest {
+        request: ChatRequest,
+    },
 }

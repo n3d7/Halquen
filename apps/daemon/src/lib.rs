@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
 
-pub mod ipc;
-pub mod service;
 mod chat;
 mod interaction_service;
+pub mod ipc;
 mod logging;
+pub mod service;
 
 pub use ipc::{DaemonError, run};
 pub use service::HalquenService;

@@ -9,17 +9,10 @@ pub mod intent;
 pub mod interaction;
 pub mod trust;
 
-pub use action::{
-    ActionArgumentKind,
-    ActionArguments,
-    ActionRequest,
-};
+pub use action::{ActionArgumentKind, ActionArguments, ActionRequest};
 
 pub use capability::{
-    CapabilityDescriptor,
-    CapabilityValidationError,
-    ConfirmationPolicy,
-    RiskClass,
+    CapabilityDescriptor, CapabilityValidationError, ConfirmationPolicy, RiskClass,
     ScopeRequirement,
 };
 

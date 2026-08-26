@@ -65,13 +65,20 @@ This document describes implemented controls, not a claim of complete system sec
 - Linux/Unix sockets and Linux ownership discovery are the supported platform path.
 - Execution is dry-run only. A future real executor requires additional capability-specific threat
   modelling and cancellable side-effect semantics.
-- The daemon handles requests sequentially. A long non-streaming provider call can delay other local
-  clients; provider timeouts bound it, but protocol streaming/cancellation is not implemented.
+- Authority-bearing service operations remain serialized, while socket connections are handled
+  concurrently. Typed chat cancellation bypasses the busy service lock, targets an exact active
+  request ID, and drops the provider future. Provider responses are still non-streaming, and other
+  non-cancellation clients can wait behind a long provider call until its timeout.
 - OpenAI-compatible/OpenAI/Ollama/LM Studio adapters are implemented. Anthropic and Gemini are typed
   unsupported boundaries, not guessed network implementations.
 - The OS keyring must be available for cloud credentials; session-only secrets are not implemented.
 - Persistent permission grants, background consolidation, semantic similarity reuse, embeddings,
   provider cost tables, and automatic model discovery are not implemented.
-- Diagnostics exposes a bounded in-memory recent list and automatic log rotation; clearing/opening
-  log files from the GUI is not yet exposed.
+- Diagnostics exposes a bounded in-memory recent list, automatic log rotation, and GUI cleanup of
+  historical log files that preserves the active log and audit records. Opening the log directory
+  from the GUI is not exposed.
 - Filesystem validation is path-based and does not claim race-free `openat2` resolution.
+- The current Linux Tauri 2.x/WebKitGTK stack transitively resolves `glib 0.18.5`, which is covered
+  by `RUSTSEC-2024-0429`; RustSec lists `glib >=0.20.0` as patched, while Tauri's GTK4/WebKitGTK 6
+  migration remains upstream work. The advisory is intentionally reported by dependency checks
+  rather than silently ignored in `deny.toml`.

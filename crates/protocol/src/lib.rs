@@ -4,25 +4,25 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use thiserror::Error;
 
+pub mod client;
+pub mod interaction;
 pub mod request;
 pub mod response;
 pub mod transport;
-pub mod interaction;
-pub mod client;
 
-pub use request::{ProtocolRequest, RequestEnvelope};
-pub use response::{
-    HealthStatus, ProtocolErrorBody, ProtocolErrorCode, ProtocolResponse, ResponseEnvelope,
-};
+pub use client::{ClientError, DaemonClient};
 pub use interaction::{
     ChatRequest, ChatResult, ConfirmationPrompt, ConfirmationResult, DiagnosticsSnapshot,
     MemoryMutationReceipt, MemoryQuery, MemoryStateUpdate, ModelUpsert, PromptPreview,
     ProviderTestStatus, ProviderUpsert,
 };
+pub use request::{ProtocolRequest, RequestEnvelope};
+pub use response::{
+    HealthStatus, ProtocolErrorBody, ProtocolErrorCode, ProtocolResponse, ResponseEnvelope,
+};
 pub use transport::{RuntimePathError, RuntimePaths};
-pub use client::{ClientError, DaemonClient};
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 pub const MAX_FRAME_SIZE: usize = 64 * 1024;
 
 #[derive(Debug, Error)]
@@ -149,7 +149,10 @@ mod tests {
     #[test]
     fn oversized_request_is_rejected_before_parsing() {
         let frame = vec![b'x'; MAX_FRAME_SIZE + 1];
-        assert!(matches!(decode_request(&frame), Err(CodecError::FrameTooLarge)));
+        assert!(matches!(
+            decode_request(&frame),
+            Err(CodecError::FrameTooLarge)
+        ));
     }
 
     #[test]
@@ -201,5 +204,18 @@ mod tests {
                 }
             } if id == model_id
         ));
+    }
+
+    #[test]
+    fn chat_cancellation_round_trip_preserves_target_request_id() {
+        let request = RequestEnvelope {
+            version: PROTOCOL_VERSION,
+            request_id: "request:cancel-command".to_owned(),
+            request: ProtocolRequest::CancelChat {
+                request_id: "request:chat-target".to_owned(),
+            },
+        };
+        let decoded = decode_request(&encode_request(&request).unwrap()).unwrap();
+        assert_eq!(decoded, request);
     }
 }

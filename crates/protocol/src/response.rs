@@ -22,11 +22,23 @@ pub struct ResponseEnvelope {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+// Keeping wire DTOs inline preserves a simple, stable public protocol API. Boxing the largest
+// payload solely for process-local enum size would leak that implementation detail to every client.
+#[allow(clippy::large_enum_variant)]
 pub enum ProtocolResponse {
-    Health { status: HealthStatus, schema_version: i64 },
-    Capabilities { capabilities: Vec<CapabilityDescriptor> },
-    Capability { capability: Option<CapabilityDescriptor> },
-    Evaluation { decision: PolicyDecision },
+    Health {
+        status: HealthStatus,
+        schema_version: i64,
+    },
+    Capabilities {
+        capabilities: Vec<CapabilityDescriptor>,
+    },
+    Capability {
+        capability: Option<CapabilityDescriptor>,
+    },
+    Evaluation {
+        decision: PolicyDecision,
+    },
     DryRun {
         decision: PolicyDecision,
         receipt: ExecutionReceipt,
@@ -37,29 +49,80 @@ pub enum ProtocolResponse {
         evidence: u64,
         unknown_cases: u64,
     },
-    AuditStats { records: u64, executions: u64 },
-    Chat { result: ChatResult },
-    ChatSessions { sessions: Vec<ChatSession> },
-    ChatMessages { messages: Vec<ChatMessage> },
-    Activity { events: Vec<ActivityEvent> },
-    MemoryItems { items: Vec<MemoryView> },
-    MemoryHistory { revisions: Vec<MemoryRevisionView> },
-    MemoryUpdated { updated: bool },
-    MemoryMutation { receipt: MemoryMutationReceipt },
-    Providers { providers: Vec<Provider> },
-    ProviderSaved { provider: Provider },
-    ProviderRemoved { removed: bool },
-    ProviderTest { result: ProviderTestStatus },
-    Models { models: Vec<AiModel> },
-    ModelSaved { model: AiModel },
-    ApplicationSettings { settings: ApplicationSettings },
-    SettingsUpdated { settings: ApplicationSettings },
-    UsageStats { stats: UsageStats },
-    Diagnostics { snapshot: DiagnosticsSnapshot },
+    AuditStats {
+        records: u64,
+        executions: u64,
+    },
+    Chat {
+        result: ChatResult,
+    },
+    ChatCancellation {
+        requested: bool,
+    },
+    ChatSessions {
+        sessions: Vec<ChatSession>,
+    },
+    ChatMessages {
+        messages: Vec<ChatMessage>,
+    },
+    Activity {
+        events: Vec<ActivityEvent>,
+    },
+    MemoryItems {
+        items: Vec<MemoryView>,
+    },
+    MemoryHistory {
+        revisions: Vec<MemoryRevisionView>,
+    },
+    MemoryUpdated {
+        updated: bool,
+    },
+    MemoryMutation {
+        receipt: MemoryMutationReceipt,
+    },
+    Providers {
+        providers: Vec<Provider>,
+    },
+    ProviderSaved {
+        provider: Provider,
+    },
+    ProviderRemoved {
+        removed: bool,
+    },
+    ProviderTest {
+        result: ProviderTestStatus,
+    },
+    Models {
+        models: Vec<AiModel>,
+    },
+    ModelSaved {
+        model: AiModel,
+    },
+    ApplicationSettings {
+        settings: ApplicationSettings,
+    },
+    SettingsUpdated {
+        settings: ApplicationSettings,
+    },
+    UsageStats {
+        stats: UsageStats,
+    },
+    Diagnostics {
+        snapshot: DiagnosticsSnapshot,
+    },
+    OperationalLogsCleared {
+        removed: u64,
+    },
     FeedbackRecorded,
-    Confirmation { result: ConfirmationResult },
-    AiRequestPreview { preview: PromptPreview },
-    Error { error: ProtocolErrorBody },
+    Confirmation {
+        result: ConfirmationResult,
+    },
+    AiRequestPreview {
+        preview: PromptPreview,
+    },
+    Error {
+        error: ProtocolErrorBody,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

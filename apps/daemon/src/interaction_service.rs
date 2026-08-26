@@ -5,16 +5,14 @@ use halquen_ai::{
     AiError, AiRequest, ContextBuilder, ContextItem, ModelRouter, PromptComposer, PromptProfile,
     ProviderClient, RouteRequest, SecretError, SecretStore, validate_provider,
 };
-use halquen_audit::{
-    AuditEvent, AuditRecord, ExecutionReceipt, ExecutionStatus, SafeResultCode,
-};
+use halquen_audit::{AuditEvent, AuditRecord, ExecutionReceipt, ExecutionStatus, SafeResultCode};
 use halquen_capabilities::{ExecutionResultCode, Executor};
 use halquen_domain::{
-    ActionArguments, ActionRequest, ActivityEvent, ActivityId, ActivityKind, AiTaskType,
-    AuditId, CacheEntryId, CachedResponse, CapabilityId, ChatMessage, ChatMessageId, ChatOrigin,
-    ChatRole, ChatRoute, ContextCategory, DiagnosticEntry, DiagnosticSeverity, EvidenceId,
-    ExecutionId, MemoryId, MemoryRevisionId, ModelSelection, PrivacyClass, Provider,
-    ProviderId, ProviderStatus, ResponseFeedback, TrustClass, UsageStats,
+    ActionArguments, ActionRequest, ActivityEvent, ActivityId, ActivityKind, AiTaskType, AuditId,
+    CacheEntryId, CachedResponse, CapabilityId, ChatMessage, ChatMessageId, ChatOrigin, ChatRole,
+    ChatRoute, ContextCategory, DiagnosticEntry, DiagnosticSeverity, EvidenceId, ExecutionId,
+    MemoryId, MemoryRevisionId, ModelSelection, PrivacyClass, Provider, ProviderId, ProviderStatus,
+    ResponseFeedback, TrustClass, UsageStats,
 };
 use halquen_memory::{Evidence, MemoryItem, MemoryKind, MemoryRevision, MemoryValue};
 use halquen_policy::{PolicyContext, PolicyOutcome};
@@ -24,6 +22,7 @@ use halquen_protocol::{
     PromptPreview, ProtocolErrorBody, ProtocolErrorCode, ProtocolResponse, ProviderTestStatus,
     ProviderUpsert,
 };
+use tokio::sync::watch;
 use tokio::time::timeout;
 use zeroize::Zeroizing;
 
@@ -47,6 +46,17 @@ impl<E: Executor> HalquenService<E> {
         &mut self,
         request: ChatRequest,
         correlation_id: &str,
+    ) -> Result<ProtocolResponse, ProtocolErrorBody> {
+        let (_sender, receiver) = watch::channel(false);
+        self.chat_with_cancellation(request, correlation_id, receiver)
+            .await
+    }
+
+    pub(crate) async fn chat_with_cancellation(
+        &mut self,
+        request: ChatRequest,
+        correlation_id: &str,
+        mut cancellation: watch::Receiver<bool>,
     ) -> Result<ProtocolResponse, ProtocolErrorBody> {
         let message = request.message.trim();
         if message.is_empty() || message.len() > 16_384 {
@@ -86,13 +96,7 @@ impl<E: Executor> HalquenService<E> {
 
         if let Some(intent) = resolve_local(message) {
             return self
-                .handle_local_intent(
-                    intent,
-                    session,
-                    user_message,
-                    correlation_id,
-                    started,
-                )
+                .handle_local_intent(intent, session, user_message, correlation_id, started)
                 .await;
         }
 
@@ -101,39 +105,42 @@ impl<E: Executor> HalquenService<E> {
             .database
             .application_settings()
             .map_err(internal_error)?;
-        if settings.prefer_cached_local {
-            if let Some(entry) = self
+        if settings.prefer_cached_local
+            && let Some(entry) = self
                 .database
                 .cached_response(&normalized, "global", timestamp)
                 .map_err(internal_error)?
-            {
-                let estimated = u64::try_from(
-                    message.chars().count().saturating_add(entry.response.chars().count()) / 4,
-                )
-                .unwrap_or(u64::MAX);
-                self.database
-                    .record_cache_hit(&entry.id, timestamp, estimated)
-                    .map_err(internal_error)?;
-                self.activity(
-                    Some(session.id.clone()),
-                    correlation_id,
-                    ActivityKind::CacheHit,
-                    "Reusable response resolved locally",
-                    Some("No AI provider was contacted".to_owned()),
-                )?;
-                let assistant = assistant_message(
-                    &session.id,
-                    entry.response,
-                    ChatOrigin::Cache,
-                    ChatRoute::ResponseCache,
-                    started,
-                    None,
-                    None,
-                    None,
-                    Some(entry.id),
-                );
-                return self.finish_chat(session, user_message, assistant, None);
-            }
+        {
+            let estimated = u64::try_from(
+                message
+                    .chars()
+                    .count()
+                    .saturating_add(entry.response.chars().count())
+                    / 4,
+            )
+            .unwrap_or(u64::MAX);
+            self.database
+                .record_cache_hit(&entry.id, timestamp, estimated)
+                .map_err(internal_error)?;
+            self.activity(
+                Some(session.id.clone()),
+                correlation_id,
+                ActivityKind::CacheHit,
+                "Reusable response resolved locally",
+                Some("No AI provider was contacted".to_owned()),
+            )?;
+            let assistant = assistant_message(
+                &session.id,
+                entry.response,
+                ChatOrigin::Cache,
+                ChatRoute::ResponseCache,
+                started,
+                None,
+                None,
+                None,
+                Some(entry.id),
+            );
+            return self.finish_chat(session, user_message, assistant, None);
         }
 
         self.activity(
@@ -149,6 +156,7 @@ impl<E: Executor> HalquenService<E> {
             user_message,
             correlation_id,
             started,
+            &mut cancellation,
         )
         .await
     }
@@ -167,9 +175,8 @@ impl<E: Executor> HalquenService<E> {
                 entity_id,
             } => {
                 let action = ActionRequest::new(
-                    CapabilityId::new("system.open_app").map_err(|_| {
-                        internal_error("built-in capability identifier is invalid")
-                    })?,
+                    CapabilityId::new("system.open_app")
+                        .map_err(|_| internal_error("built-in capability identifier is invalid"))?,
                     ActionArguments::OpenApp { app: entity_id },
                 );
                 let response = self.dry_run_action(action.clone()).await?;
@@ -197,10 +204,8 @@ impl<E: Executor> HalquenService<E> {
                     ProtocolResponse::DryRun { decision, .. }
                         if decision.outcome == PolicyOutcome::Confirm =>
                     {
-                        let confirmation_id = format!(
-                            "confirmation:{}",
-                            halquen_domain::ProposalId::generate()
-                        );
+                        let confirmation_id =
+                            format!("confirmation:{}", halquen_domain::ProposalId::generate());
                         let expires_at_ms = now_ms().saturating_add(CONFIRMATION_TTL_MS);
                         self.pending_confirmations.insert(
                             confirmation_id.clone(),
@@ -259,11 +264,8 @@ impl<E: Executor> HalquenService<E> {
                 self.finish_chat(session, user_message, assistant, confirmation)
             }
             LocalIntent::RememberPreference { key, value } => {
-                let receipt = self.commit_preference(
-                    &key,
-                    &value,
-                    &format!("chat:{}", user_message.id),
-                )?;
+                let receipt =
+                    self.commit_preference(&key, &value, &format!("chat:{}", user_message.id))?;
                 self.database
                     .add_usage(UsageStats {
                         local_resolutions: 1,
@@ -340,6 +342,7 @@ impl<E: Executor> HalquenService<E> {
         user_message: ChatMessage,
         correlation_id: &str,
         started: Instant,
+        cancellation: &mut watch::Receiver<bool>,
     ) -> Result<ProtocolResponse, ProtocolErrorBody> {
         let settings = self
             .database
@@ -441,15 +444,52 @@ impl<E: Executor> HalquenService<E> {
             context: projection.items,
             max_output_tokens: settings.max_output_tokens,
         };
-        let response = self
-            .provider_client
-            .complete(
+        let response = if *cancellation.borrow() {
+            None
+        } else {
+            let provider_call = self.provider_client.complete(
                 provider,
                 model,
                 credential.as_deref().map(String::as_str),
                 &request,
-            )
-            .await;
+            );
+            tokio::pin!(provider_call);
+            tokio::select! {
+                response = &mut provider_call => Some(response),
+                _ = cancellation.changed() => {
+                    let was_cancelled = *cancellation.borrow();
+                    if was_cancelled {
+                        None
+                    } else {
+                        Some(provider_call.await)
+                    }
+                }
+            }
+        };
+        let Some(response) = response else {
+            self.activity(
+                Some(session.id.clone()),
+                correlation_id,
+                ActivityKind::AiFailed,
+                "AI request cancelled",
+                Some(
+                    "The in-progress provider request was dropped without using its result"
+                        .to_owned(),
+                ),
+            )?;
+            let assistant = assistant_message(
+                &session.id,
+                "Request cancelled.".to_owned(),
+                ChatOrigin::System,
+                ChatRoute::Unavailable,
+                started,
+                None,
+                None,
+                None,
+                None,
+            );
+            return self.finish_chat(session, user_message, assistant, None);
+        };
         match response {
             Ok(response) => {
                 let candidate_id = if has_retrieved_context {
@@ -543,7 +583,10 @@ impl<E: Executor> HalquenService<E> {
                 );
                 let assistant = assistant_message(
                     &session.id,
-                    format!("AI is currently unavailable. {}", sanitized_ai_error(&error)),
+                    format!(
+                        "AI is currently unavailable. {}",
+                        sanitized_ai_error(&error)
+                    ),
                     ChatOrigin::System,
                     ChatRoute::Unavailable,
                     started,
@@ -648,7 +691,10 @@ impl<E: Executor> HalquenService<E> {
         limit: u16,
     ) -> Result<ProtocolResponse, ProtocolErrorBody> {
         Ok(ProtocolResponse::ChatSessions {
-            sessions: self.database.list_chat_sessions(limit).map_err(internal_error)?,
+            sessions: self
+                .database
+                .list_chat_sessions(limit)
+                .map_err(internal_error)?,
         })
     }
 
@@ -665,10 +711,7 @@ impl<E: Executor> HalquenService<E> {
         })
     }
 
-    pub(crate) fn list_activity(
-        &self,
-        limit: u16,
-    ) -> Result<ProtocolResponse, ProtocolErrorBody> {
+    pub(crate) fn list_activity(&self, limit: u16) -> Result<ProtocolResponse, ProtocolErrorBody> {
         Ok(ProtocolResponse::Activity {
             events: self.database.list_activity(limit).map_err(internal_error)?,
         })
@@ -773,9 +816,11 @@ impl<E: Executor> HalquenService<E> {
         &mut self,
         input: ProviderUpsert,
     ) -> Result<ProtocolResponse, ProtocolErrorBody> {
-        if input.api_key.as_ref().is_some_and(|value| {
-            value.is_empty() || value.len() > 8_192 || value.contains('\0')
-        }) {
+        if input
+            .api_key
+            .as_ref()
+            .is_some_and(|value| value.is_empty() || value.len() > 8_192 || value.contains('\0'))
+        {
             return Err(validation("provider credential is empty or too large"));
         }
         let timestamp = now_ms();
@@ -854,7 +899,10 @@ impl<E: Executor> HalquenService<E> {
         &mut self,
         provider_id: &ProviderId,
     ) -> Result<ProtocolResponse, ProtocolErrorBody> {
-        let provider = self.database.provider(provider_id).map_err(internal_error)?;
+        let provider = self
+            .database
+            .provider(provider_id)
+            .map_err(internal_error)?;
         let credential_id = provider.and_then(|provider| provider.credential_id);
         let previous_secret = credential_id
             .as_deref()
@@ -862,7 +910,7 @@ impl<E: Executor> HalquenService<E> {
             .transpose()?
             .flatten();
         if let Some(reference) = credential_id.as_deref() {
-            match self.secret_store.delete(&reference) {
+            match self.secret_store.delete(reference) {
                 Ok(()) | Err(SecretError::NotFound) => {}
                 Err(_) => return Err(secret_store_error()),
             }
@@ -876,10 +924,8 @@ impl<E: Executor> HalquenService<E> {
                 return Err(internal_error(error));
             }
         };
-        if !removed {
-            if let Some(reference) = credential_id.as_deref() {
-                restore_secret(&*self.secret_store, reference, previous_secret)?;
-            }
+        if !removed && let Some(reference) = credential_id.as_deref() {
+            restore_secret(&*self.secret_store, reference, previous_secret)?;
         }
         Ok(ProtocolResponse::ProviderRemoved { removed })
     }
@@ -900,7 +946,10 @@ impl<E: Executor> HalquenService<E> {
             .await;
         let (status, message) = match result {
             Ok(result) => (ProviderStatus::Connected, result.sanitized_message),
-            Err(error) => (provider_status_for_error(&error), sanitized_ai_error(&error).to_owned()),
+            Err(error) => (
+                provider_status_for_error(&error),
+                sanitized_ai_error(&error).to_owned(),
+            ),
         };
         provider.status = status;
         provider.updated_at_ms = now_ms();
@@ -982,10 +1031,7 @@ impl<E: Executor> HalquenService<E> {
         })
     }
 
-    pub(crate) fn diagnostics(
-        &self,
-        limit: u16,
-    ) -> Result<ProtocolResponse, ProtocolErrorBody> {
+    pub(crate) fn diagnostics(&self, limit: u16) -> Result<ProtocolResponse, ProtocolErrorBody> {
         let memory = self.database.memory_stats().map_err(internal_error)?;
         let audit = self.database.audit_stats().map_err(internal_error)?;
         let providers = self.database.list_providers().map_err(internal_error)?;
@@ -1022,6 +1068,12 @@ impl<E: Executor> HalquenService<E> {
         })
     }
 
+    pub(crate) fn clear_operational_logs(&mut self) -> Result<ProtocolResponse, ProtocolErrorBody> {
+        let removed = crate::logging::clear_historical_logs().map_err(internal_error)?;
+        self.diagnostics.clear();
+        Ok(ProtocolResponse::OperationalLogsCleared { removed })
+    }
+
     pub(crate) fn submit_response_feedback(
         &mut self,
         cache_entry_id: &CacheEntryId,
@@ -1046,8 +1098,8 @@ impl<E: Executor> HalquenService<E> {
             .map_err(internal_error)?;
         let providers = self.database.list_providers().map_err(internal_error)?;
         let models = self.database.list_models().map_err(internal_error)?;
-        let contains_personal_context = settings.allow_personal_context
-            && request.session_id.is_some();
+        let contains_personal_context =
+            settings.allow_personal_context && request.session_id.is_some();
         let selected = ModelRouter
             .select(
                 &settings,
@@ -1080,15 +1132,17 @@ impl<E: Executor> HalquenService<E> {
             Vec::new()
         };
         let projection = ContextBuilder::new(settings.max_context_tokens).build(context);
-        let current_request_tokens = u32::try_from(request.message.chars().count().div_ceil(4))
-            .unwrap_or(u32::MAX);
+        let current_request_tokens =
+            u32::try_from(request.message.chars().count().div_ceil(4)).unwrap_or(u32::MAX);
         let mut categories = vec![ContextCategory::CurrentRequest];
         if !projection.items.is_empty() {
             categories.push(ContextCategory::RecentConversation);
         }
         Ok(ProtocolResponse::AiRequestPreview {
             preview: PromptPreview {
-                provider_id: selected.as_ref().map(|selected| selected.provider_id.clone()),
+                provider_id: selected
+                    .as_ref()
+                    .map(|selected| selected.provider_id.clone()),
                 model_id: selected.map(|selected| selected.model_id),
                 task: AiTaskType::Conversation,
                 estimated_context_tokens: current_request_tokens
@@ -1131,10 +1185,12 @@ impl<E: Executor> HalquenService<E> {
             &PolicyContext::default(),
         );
         let decision = evaluation.decision.clone();
-        let authorization = evaluation.into_authorization().ok_or_else(|| ProtocolErrorBody {
-            code: ProtocolErrorCode::PrivacyDenied,
-            message: "policy denied the confirmed action".to_owned(),
-        })?;
+        let authorization = evaluation
+            .into_authorization()
+            .ok_or_else(|| ProtocolErrorBody {
+                code: ProtocolErrorCode::PrivacyDenied,
+                message: "policy denied the confirmed action".to_owned(),
+            })?;
         let mut audit_records = vec![
             AuditRecord {
                 id: AuditId::generate(),
@@ -1293,6 +1349,8 @@ impl<E: Executor> HalquenService<E> {
     }
 }
 
+// A single constructor keeps every persisted assistant message on the same metadata path.
+#[allow(clippy::too_many_arguments)]
 fn assistant_message(
     session_id: &halquen_domain::ChatSessionId,
     content: String,
@@ -1423,6 +1481,11 @@ mod tests {
         calls: AtomicU32,
     }
 
+    #[derive(Default)]
+    struct SlowProviderClient {
+        calls: AtomicU32,
+    }
+
     impl ProviderClient for FakeProviderClient {
         fn complete<'a>(
             &'a self,
@@ -1460,17 +1523,46 @@ mod tests {
         }
     }
 
+    impl ProviderClient for SlowProviderClient {
+        fn complete<'a>(
+            &'a self,
+            _provider: &'a Provider,
+            model: &'a AiModel,
+            _credential: Option<&'a str>,
+            _request: &'a AiRequest,
+        ) -> ProviderFuture<'a, AiResponse> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                Ok(AiResponse {
+                    content: "This response must never be used after cancellation.".to_owned(),
+                    provider_model_id: model.provider_model_id.clone(),
+                    usage: AiUsage::default(),
+                })
+            })
+        }
+
+        fn test<'a>(
+            &'a self,
+            _provider: &'a Provider,
+            _credential: Option<&'a str>,
+        ) -> ProviderFuture<'a, ProviderTestResult> {
+            Box::pin(async {
+                Ok(ProviderTestResult {
+                    reachable: true,
+                    sanitized_message: "Connected".to_owned(),
+                })
+            })
+        }
+    }
+
     #[derive(Default)]
     struct FakeSecretStore {
         values: Mutex<BTreeMap<String, String>>,
     }
 
     impl SecretStore for FakeSecretStore {
-        fn store(
-            &self,
-            credential_id: &str,
-            secret: Zeroizing<String>,
-        ) -> Result<(), SecretError> {
+        fn store(&self, credential_id: &str, secret: Zeroizing<String>) -> Result<(), SecretError> {
             self.values
                 .lock()
                 .unwrap()
@@ -1515,13 +1607,24 @@ mod tests {
         let fake = Arc::new(FakeProviderClient::default());
         let mut service = service();
         service.set_integrations(fake.clone(), Arc::new(FakeSecretStore::default()));
-        let response = service.chat(chat("Open Telegram"), "request:local").await.unwrap();
+        let response = service
+            .chat(chat("Open Telegram"), "request:local")
+            .await
+            .unwrap();
         let result = match response {
             ProtocolResponse::Chat { result } => result,
             other => panic!("unexpected response: {other:?}"),
         };
-        assert_eq!(result.assistant_message.route, Some(ChatRoute::LocalCapability));
-        assert!(result.assistant_message.content.contains("No application was launched"));
+        assert_eq!(
+            result.assistant_message.route,
+            Some(ChatRoute::LocalCapability)
+        );
+        assert!(
+            result
+                .assistant_message
+                .content
+                .contains("No application was launched")
+        );
         assert_eq!(fake.calls.load(Ordering::Relaxed), 0);
     }
 
@@ -1602,11 +1705,79 @@ mod tests {
             .unwrap();
         match second {
             ProtocolResponse::Chat { result } => {
-                assert_eq!(result.assistant_message.route, Some(ChatRoute::ResponseCache));
+                assert_eq!(
+                    result.assistant_message.route,
+                    Some(ChatRoute::ResponseCache)
+                );
             }
             other => panic!("unexpected response: {other:?}"),
         }
         assert_eq!(fake.calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelling_chat_drops_provider_call_without_recording_model_usage() {
+        let slow = Arc::new(SlowProviderClient::default());
+        let mut service = service();
+        service.set_integrations(slow.clone(), Arc::new(FakeSecretStore::default()));
+        let provider = Provider {
+            id: ProviderId::generate(),
+            kind: ProviderKind::OpenAiCompatible,
+            name: "Slow local fake".to_owned(),
+            base_url: "http://127.0.0.1:11434/v1".to_owned(),
+            enabled: true,
+            privacy: PrivacyClass::Local,
+            configured: true,
+            credential_id: None,
+            status: ProviderStatus::Configured,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        service.database.upsert_provider(&provider).unwrap();
+        service
+            .database
+            .upsert_model(&AiModel {
+                id: ModelId::generate(),
+                provider_id: provider.id,
+                display_name: "Slow fake model".to_owned(),
+                provider_model_id: "slow-fake-model".to_owned(),
+                enabled: true,
+                context_limit: Some(8_192),
+                privacy: PrivacyClass::Local,
+                priority: 0,
+                task_eligibility: vec![AiTaskType::Conversation],
+                is_default: true,
+            })
+            .unwrap();
+
+        let (sender, receiver) = tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            sender.send(true).unwrap();
+        });
+        let response = tokio::time::timeout(
+            Duration::from_secs(1),
+            service.chat_with_cancellation(
+                chat("Use the slow provider"),
+                "request:cancelled",
+                receiver,
+            ),
+        )
+        .await
+        .expect("cancellation should not wait for the provider")
+        .unwrap();
+
+        match response {
+            ProtocolResponse::Chat { result } => {
+                assert_eq!(result.assistant_message.content, "Request cancelled.");
+                assert_eq!(result.assistant_message.route, Some(ChatRoute::Unavailable));
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+        let usage = service.database.usage_stats().unwrap();
+        assert_eq!(slow.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(usage.model_requests, 0);
+        assert_eq!(usage.failed_provider_calls, 0);
     }
 
     #[test]

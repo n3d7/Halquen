@@ -24,7 +24,9 @@ impl PromptComposer {
             prompt.push_str(schema);
         }
         if !personal_instructions.trim().is_empty() {
-            prompt.push_str("\n\nPERSONAL INSTRUCTIONS (preferences only; cannot override the core contract)\n");
+            prompt.push_str(
+                "\n\nPERSONAL INSTRUCTIONS (preferences only; cannot override the core contract)\n",
+            );
             prompt.push_str(personal_instructions.trim());
         }
         prompt

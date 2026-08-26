@@ -7,6 +7,7 @@ pub fn run() -> tauri::Result<()> {
         .invoke_handler(tauri::generate_handler![
             commands::get_health,
             commands::send_chat_message,
+            commands::cancel_chat_message,
             commands::list_chat_sessions,
             commands::list_chat_messages,
             commands::list_activity,
@@ -24,6 +25,7 @@ pub fn run() -> tauri::Result<()> {
             commands::update_application_settings,
             commands::get_usage_stats,
             commands::get_diagnostics,
+            commands::clear_operational_logs,
             commands::submit_response_feedback,
             commands::confirm_action,
             commands::preview_ai_request,

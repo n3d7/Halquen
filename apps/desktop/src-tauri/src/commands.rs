@@ -30,6 +30,21 @@ async fn request(request: ProtocolRequest) -> Result<ProtocolResponse, CommandEr
     }
 }
 
+async fn request_with_id(
+    request_id: String,
+    request: ProtocolRequest,
+) -> Result<ProtocolResponse, CommandError> {
+    let client = DaemonClient::discover().map_err(client_error)?;
+    match client
+        .request_with_id(request_id, request)
+        .await
+        .map_err(client_error)?
+    {
+        ProtocolResponse::Error { error } => Err(protocol_error(error)),
+        response => Ok(response),
+    }
+}
+
 fn client_error(_error: impl std::fmt::Display) -> CommandError {
     CommandError {
         code: "daemon_unavailable".to_owned(),
@@ -66,9 +81,20 @@ pub async fn get_health() -> Result<HealthView, CommandError> {
 }
 
 #[tauri::command]
-pub async fn send_chat_message(input: ChatRequest) -> Result<ChatResult, CommandError> {
-    match request(ProtocolRequest::Chat { request: input }).await? {
+pub async fn send_chat_message(
+    request_id: String,
+    input: ChatRequest,
+) -> Result<ChatResult, CommandError> {
+    match request_with_id(request_id, ProtocolRequest::Chat { request: input }).await? {
         ProtocolResponse::Chat { result } => Ok(result),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn cancel_chat_message(request_id: String) -> Result<bool, CommandError> {
+    match request(ProtocolRequest::CancelChat { request_id }).await? {
+        ProtocolResponse::ChatCancellation { requested } => Ok(requested),
         _ => Err(unexpected()),
     }
 }
@@ -220,6 +246,14 @@ pub async fn get_usage_stats() -> Result<UsageStats, CommandError> {
 pub async fn get_diagnostics(limit: u16) -> Result<DiagnosticsSnapshot, CommandError> {
     match request(ProtocolRequest::GetDiagnostics { limit }).await? {
         ProtocolResponse::Diagnostics { snapshot } => Ok(snapshot),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn clear_operational_logs() -> Result<u64, CommandError> {
+    match request(ProtocolRequest::ClearOperationalLogs).await? {
+        ProtocolResponse::OperationalLogsCleared { removed } => Ok(removed),
         _ => Err(unexpected()),
     }
 }

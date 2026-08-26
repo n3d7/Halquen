@@ -93,13 +93,13 @@ impl CapabilityDescriptor {
         if self.risk == RiskClass::LocalSideEffect && (!self.side_effect || self.reversible) {
             return Err(CapabilityValidationError::InvalidLocalSideEffect);
         }
-        if self.risk == RiskClass::ReversibleLocalWrite
-            && (!self.side_effect || !self.reversible)
-        {
+        if self.risk == RiskClass::ReversibleLocalWrite && (!self.side_effect || !self.reversible) {
             return Err(CapabilityValidationError::InvalidReversibleLocalWrite);
         }
-        if matches!(self.risk, RiskClass::ExternalSideEffect | RiskClass::Destructive)
-            && !self.side_effect
+        if matches!(
+            self.risk,
+            RiskClass::ExternalSideEffect | RiskClass::Destructive
+        ) && !self.side_effect
         {
             return Err(CapabilityValidationError::RiskRequiresSideEffect);
         }
@@ -143,15 +143,39 @@ mod tests {
 
     #[test]
     fn accepts_non_reversible_local_side_effect() {
-        assert!(descriptor(RiskClass::LocalSideEffect, true, false).validate().is_ok());
+        assert!(
+            descriptor(RiskClass::LocalSideEffect, true, false)
+                .validate()
+                .is_ok()
+        );
     }
 
     #[test]
     fn rejects_risk_classes_with_impossible_effect_metadata() {
-        assert!(descriptor(RiskClass::ReadOnly, false, true).validate().is_err());
-        assert!(descriptor(RiskClass::LocalSideEffect, false, false).validate().is_err());
-        assert!(descriptor(RiskClass::LocalSideEffect, true, true).validate().is_err());
-        assert!(descriptor(RiskClass::ExternalSideEffect, false, false).validate().is_err());
-        assert!(descriptor(RiskClass::Destructive, true, true).validate().is_err());
+        assert!(
+            descriptor(RiskClass::ReadOnly, false, true)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            descriptor(RiskClass::LocalSideEffect, false, false)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            descriptor(RiskClass::LocalSideEffect, true, true)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            descriptor(RiskClass::ExternalSideEffect, false, false)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            descriptor(RiskClass::Destructive, true, true)
+                .validate()
+                .is_err()
+        );
     }
 }

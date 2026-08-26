@@ -3,9 +3,9 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod interaction;
 pub mod paths;
 pub mod sqlite;
-mod interaction;
 
 pub use paths::DataPaths;
 pub use sqlite::Database;

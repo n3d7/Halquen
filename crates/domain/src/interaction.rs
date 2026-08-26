@@ -377,8 +377,10 @@ mod tests {
 
     #[test]
     fn malformed_budgets_are_rejected() {
-        let mut settings = ApplicationSettings::default();
-        settings.max_model_calls_per_request = 4;
+        let settings = ApplicationSettings {
+            max_model_calls_per_request: 4,
+            ..ApplicationSettings::default()
+        };
         assert_eq!(
             settings.validate(),
             Err(SettingsValidationError::InvalidModelCallBudget)

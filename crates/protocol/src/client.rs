@@ -49,8 +49,15 @@ impl DaemonClient {
     }
 
     pub async fn request(&self, request: ProtocolRequest) -> Result<ProtocolResponse, ClientError> {
+        self.request_with_id(request_id(), request).await
+    }
+
+    pub async fn request_with_id(
+        &self,
+        request_id: String,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolResponse, ClientError> {
         self.paths.validate_client()?;
-        let request_id = request_id();
         let envelope = RequestEnvelope {
             version: PROTOCOL_VERSION,
             request_id: request_id.clone(),
@@ -111,11 +118,17 @@ mod tests {
     async fn response_reader_rejects_disconnect_and_trailing_frames() {
         let (mut writer, mut reader) = duplex(64);
         writer.write_all(b"{}\n{}\n").await.unwrap();
-        assert!(matches!(read_frame(&mut reader).await, Err(ClientError::TrailingBytes)));
+        assert!(matches!(
+            read_frame(&mut reader).await,
+            Err(ClientError::TrailingBytes)
+        ));
 
         let (mut writer, mut reader) = duplex(64);
         writer.write_all(b"{}").await.unwrap();
         writer.shutdown().await.unwrap();
-        assert!(matches!(read_frame(&mut reader).await, Err(ClientError::IncompleteFrame)));
+        assert!(matches!(
+            read_frame(&mut reader).await,
+            Err(ClientError::IncompleteFrame)
+        ));
     }
 }

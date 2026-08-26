@@ -2,6 +2,4 @@
 
 pub mod receipt;
 
-pub use receipt::{
-    AuditEvent, AuditRecord, ExecutionReceipt, ExecutionStatus, SafeResultCode,
-};
+pub use receipt::{AuditEvent, AuditRecord, ExecutionReceipt, ExecutionStatus, SafeResultCode};

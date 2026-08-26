@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, Copy, Database, RefreshCw, Search, Server, Waypoints } from "lucide-react";
+import { Check, Copy, Database, RefreshCw, Search, Server, Trash2, Waypoints } from "lucide-react";
 import { Button, EmptyState, ErrorNotice, Input, PageHeader, Select, StatusBadge } from "../components/Common";
 import { commandMessage, daemon } from "../lib/daemon";
 import type { DiagnosticEntry, DiagnosticsSnapshot } from "../lib/types";
@@ -18,6 +18,7 @@ export function DiagnosticsScreen() {
   const [copied, setCopied] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<string | null>(null);
 
   async function load() {
     setBusy(true);
@@ -52,10 +53,27 @@ export function DiagnosticsScreen() {
     }
   }
 
+  async function clearLogs() {
+    if (!window.confirm("Remove historical operational log files and clear the recent diagnostics list? The active log file and audit records will be preserved.")) return;
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const removed = await daemon.clearOperationalLogs();
+      setSnapshot(await daemon.diagnostics());
+      setResult(`${removed.toLocaleString()} historical log ${removed === 1 ? "file" : "files"} removed. The active log and audit records were preserved.`);
+    } catch (reason) {
+      setError(commandMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="page">
-      <PageHeader title="Diagnostics" description="Sanitized technical status and recent operational errors. Activity and audit records have separate purposes." actions={<Button disabled={busy} onClick={() => void load()}><RefreshCw size={16} /> Refresh</Button>} />
+      <PageHeader title="Diagnostics" description="Sanitized technical status and recent operational errors. Activity and audit records have separate purposes." actions={<><Button variant="danger" disabled={busy} onClick={() => void clearLogs()}><Trash2 size={16} /> Clear old logs</Button><Button disabled={busy} onClick={() => void load()}><RefreshCw size={16} /> Refresh</Button></>} />
       {error ? <ErrorNotice message={error} onRetry={() => void load()} /> : null}
+      {result ? <div className="inline-success">{result}</div> : null}
       {snapshot ? <>
         <div className="health-grid">
           <article><Server size={18} /><span>Protocol</span><strong>v{snapshot.protocol_version}</strong></article>

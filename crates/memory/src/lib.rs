@@ -12,7 +12,9 @@ pub mod semantic;
 pub use episodic::EpisodicRecord;
 pub use evidence::{Evidence, MemoryEvidence};
 pub use procedural::{ProceduralCandidate, ProceduralPromotionValidator, PromotionDecision};
-pub use semantic::{MemoryError, MemoryItem, MemoryKind, MemoryLedger, MemoryRevision, MemoryValue};
+pub use semantic::{
+    MemoryError, MemoryItem, MemoryKind, MemoryLedger, MemoryRevision, MemoryValue,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryView {

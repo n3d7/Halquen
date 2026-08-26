@@ -1,10 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use halquen_domain::{
-    CapabilityDescriptor,
-    CapabilityId,
-};
+use halquen_domain::{CapabilityDescriptor, CapabilityId};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RegistryError {
@@ -15,7 +12,9 @@ pub enum RegistryError {
 impl fmt::Display for RegistryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::AlreadyRegistered(id) => write!(formatter, "capability {id} is already registered"),
+            Self::AlreadyRegistered(id) => {
+                write!(formatter, "capability {id} is already registered")
+            }
             Self::InvalidDescriptor(error) => write!(formatter, "invalid capability: {error}"),
         }
     }
@@ -34,10 +33,7 @@ impl CapabilityRegistry {
         }
     }
 
-    pub fn register(
-        &mut self,
-        capability: CapabilityDescriptor,
-    ) -> Result<(), RegistryError> {
+    pub fn register(&mut self, capability: CapabilityDescriptor) -> Result<(), RegistryError> {
         capability
             .validate()
             .map_err(RegistryError::InvalidDescriptor)?;
@@ -52,10 +48,7 @@ impl CapabilityRegistry {
         Ok(())
     }
 
-    pub fn get(
-        &self,
-        id: &CapabilityId,
-    ) -> Option<&CapabilityDescriptor> {
+    pub fn get(&self, id: &CapabilityId) -> Option<&CapabilityDescriptor> {
         self.capabilities.get(id)
     }
 
@@ -137,7 +130,13 @@ mod tests {
             ))
         );
         assert_eq!(registry.len(), 1);
-        assert_eq!(registry.get(&CapabilityId::new("system.open_app").unwrap()).unwrap().version, 1);
+        assert_eq!(
+            registry
+                .get(&CapabilityId::new("system.open_app").unwrap())
+                .unwrap()
+                .version,
+            1
+        );
     }
 
     #[test]
@@ -158,7 +157,10 @@ mod tests {
         second.id = CapabilityId::new("alpha.operation").unwrap();
         registry.register(test_capability()).unwrap();
         registry.register(second).unwrap();
-        let ids: Vec<_> = registry.list().map(|capability| capability.id.as_str()).collect();
+        let ids: Vec<_> = registry
+            .list()
+            .map(|capability| capability.id.as_str())
+            .collect();
         assert_eq!(ids, ["alpha.operation", "system.open_app"]);
     }
 }

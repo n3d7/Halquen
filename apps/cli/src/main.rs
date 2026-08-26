@@ -4,9 +4,7 @@ use std::env;
 use std::error::Error;
 
 use halquen_domain::{ActionArguments, ActionRequest, CapabilityId, EntityId, ModelSelection};
-use halquen_protocol::{
-    ChatRequest, DaemonClient, ProtocolRequest, ProtocolResponse,
-};
+use halquen_protocol::{ChatRequest, DaemonClient, ProtocolRequest, ProtocolResponse};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -86,16 +84,24 @@ fn print_response(response: ProtocolResponse) -> Result<(), Box<dyn Error>> {
         } => println!("status={status:?} schema_version={schema_version}"),
         ProtocolResponse::Capabilities { capabilities } => {
             for capability in capabilities {
-                println!("{} v{} {:?}", capability.id, capability.version, capability.risk);
+                println!(
+                    "{} v{} {:?}",
+                    capability.id, capability.version, capability.risk
+                );
             }
         }
-        ProtocolResponse::Capability { capability: Some(capability) } => println!(
+        ProtocolResponse::Capability {
+            capability: Some(capability),
+        } => println!(
             "{} v{} {:?}: {}",
             capability.id, capability.version, capability.risk, capability.description
         ),
         ProtocolResponse::Capability { capability: None } => println!("capability not found"),
         ProtocolResponse::Evaluation { decision } => {
-            println!("decision={:?} reason={:?}", decision.outcome, decision.reason)
+            println!(
+                "decision={:?} reason={:?}",
+                decision.outcome, decision.reason
+            )
         }
         ProtocolResponse::DryRun { decision, receipt } => println!(
             "decision={:?} status={:?} execution_id={}",
@@ -114,6 +120,9 @@ fn print_response(response: ProtocolResponse) -> Result<(), Box<dyn Error>> {
             executions,
         } => println!("records={records} executions={executions}"),
         ProtocolResponse::Chat { result } => println!("{}", result.assistant_message.content),
+        ProtocolResponse::ChatCancellation { requested } => {
+            println!("cancellation_requested={requested}")
+        }
         ProtocolResponse::ChatSessions { sessions } => println!("sessions={}", sessions.len()),
         ProtocolResponse::ChatMessages { messages } => println!("messages={}", messages.len()),
         ProtocolResponse::Activity { events } => println!("activity_events={}", events.len()),
@@ -127,21 +136,31 @@ fn print_response(response: ProtocolResponse) -> Result<(), Box<dyn Error>> {
         ProtocolResponse::Providers { providers } => println!("providers={}", providers.len()),
         ProtocolResponse::ProviderSaved { provider } => println!("provider={}", provider.name),
         ProtocolResponse::ProviderRemoved { removed } => println!("removed={removed}"),
-        ProtocolResponse::ProviderTest { result } => println!("status={:?} {}", result.status, result.message),
+        ProtocolResponse::ProviderTest { result } => {
+            println!("status={:?} {}", result.status, result.message)
+        }
         ProtocolResponse::Models { models } => println!("models={}", models.len()),
         ProtocolResponse::ModelSaved { model } => println!("model={}", model.display_name),
-        ProtocolResponse::ApplicationSettings { .. }
-        | ProtocolResponse::SettingsUpdated { .. } => println!("settings=ok"),
+        ProtocolResponse::ApplicationSettings { .. } | ProtocolResponse::SettingsUpdated { .. } => {
+            println!("settings=ok")
+        }
         ProtocolResponse::UsageStats { stats } => println!(
             "local={} ai={} cache_hits={}",
             stats.local_resolutions, stats.ai_fallbacks, stats.response_cache_hits
         ),
         ProtocolResponse::Diagnostics { snapshot } => println!(
             "protocol={} schema={} diagnostics={}",
-            snapshot.protocol_version, snapshot.schema_version, snapshot.recent.len()
+            snapshot.protocol_version,
+            snapshot.schema_version,
+            snapshot.recent.len()
         ),
+        ProtocolResponse::OperationalLogsCleared { removed } => {
+            println!("historical_logs_removed={removed}")
+        }
         ProtocolResponse::FeedbackRecorded => println!("feedback=recorded"),
-        ProtocolResponse::Confirmation { result } => println!("accepted={} {}", result.accepted, result.message),
+        ProtocolResponse::Confirmation { result } => {
+            println!("accepted={} {}", result.accepted, result.message)
+        }
         ProtocolResponse::AiRequestPreview { preview } => println!(
             "task={:?} context_tokens={} core_contract_managed={}",
             preview.task, preview.estimated_context_tokens, preview.core_contract_managed

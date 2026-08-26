@@ -32,7 +32,6 @@ impl DryRunExecutor {
     pub fn new() -> Self {
         Self
     }
-
 }
 
 impl Executor for DryRunExecutor {

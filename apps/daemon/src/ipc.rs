@@ -1,23 +1,28 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use halquen_capabilities::DryRunExecutor;
 use halquen_protocol::{
     CodecError, MAX_FRAME_SIZE, PROTOCOL_VERSION, ProtocolErrorBody, ProtocolErrorCode,
-    ProtocolResponse, ResponseEnvelope, RuntimePaths, decode_request,
-    encode_response,
+    ProtocolRequest, ProtocolResponse, RequestEnvelope, ResponseEnvelope, RuntimePaths,
+    decode_request, encode_response,
 };
 use halquen_storage::{DataPaths, Database};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixListener;
+use tokio::sync::{Mutex, watch};
 use tokio::time::timeout;
 
 use crate::service::HalquenService;
 
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
+type SharedService = Arc<Mutex<HalquenService<DryRunExecutor>>>;
+type CancellationRegistry = Arc<Mutex<BTreeMap<String, watch::Sender<bool>>>>;
 
 #[derive(Debug, Error)]
 pub enum DaemonError {
@@ -58,6 +63,8 @@ pub async fn run() -> Result<(), DaemonError> {
         data_paths.database.display().to_string(),
         runtime_paths.socket.display().to_string(),
     );
+    let service = Arc::new(Mutex::new(service));
+    let cancellations = Arc::new(Mutex::new(BTreeMap::new()));
     runtime_paths.prepare_server()?;
     let listener = UnixListener::bind(&runtime_paths.socket)?;
     runtime_paths.secure_bound_socket()?;
@@ -75,14 +82,18 @@ pub async fn run() -> Result<(), DaemonError> {
             }
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
-                if let Err(error) = handle_connection(stream, &mut service).await {
-                    tracing::warn!(
-                        component = "ipc",
-                        error_code = "request_rejected",
-                        "Rejected a local IPC request: {}",
-                        crate::logging::redact(&error.to_string())
-                    );
-                }
+                let service = Arc::clone(&service);
+                let cancellations = Arc::clone(&cancellations);
+                tokio::spawn(async move {
+                    if let Err(error) = handle_connection(stream, service, cancellations).await {
+                        tracing::warn!(
+                            component = "ipc",
+                            error_code = "request_rejected",
+                            "Rejected a local IPC request: {}",
+                            crate::logging::redact(&error.to_string())
+                        );
+                    }
+                });
             }
         }
     }
@@ -91,14 +102,15 @@ pub async fn run() -> Result<(), DaemonError> {
 
 async fn handle_connection<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
-    service: &mut HalquenService<DryRunExecutor>,
+    service: SharedService,
+    cancellations: CancellationRegistry,
 ) -> Result<(), DaemonError> {
     let frame = match timeout(IO_TIMEOUT, read_frame(&mut stream)).await {
         Ok(result) => result?,
         Err(_) => return Err(DaemonError::Timeout),
     };
     let response = match decode_request(&frame) {
-        Ok(request) => service.handle(request).await,
+        Ok(request) => dispatch_request(request, &service, &cancellations).await,
         Err(error) => codec_error_response(error),
     };
     let bytes = encode_response(&response)?;
@@ -106,6 +118,56 @@ async fn handle_connection<S: AsyncRead + AsyncWrite + Unpin>(
         .await
         .map_err(|_| DaemonError::Timeout)??;
     Ok(())
+}
+
+async fn dispatch_request(
+    envelope: RequestEnvelope,
+    service: &SharedService,
+    cancellations: &CancellationRegistry,
+) -> ResponseEnvelope {
+    if let ProtocolRequest::CancelChat { request_id } = &envelope.request {
+        let sender = cancellations.lock().await.remove(request_id);
+        let requested = sender.is_some_and(|sender| sender.send(true).is_ok());
+        return ResponseEnvelope {
+            version: PROTOCOL_VERSION,
+            request_id: envelope.request_id,
+            response: ProtocolResponse::ChatCancellation { requested },
+        };
+    }
+
+    if matches!(&envelope.request, ProtocolRequest::Chat { .. }) {
+        let active_request_id = envelope.request_id.clone();
+        let (sender, receiver) = watch::channel(false);
+        {
+            let mut pending = cancellations.lock().await;
+            if pending.contains_key(&active_request_id) {
+                return duplicate_request_response(active_request_id);
+            }
+            pending.insert(active_request_id.clone(), sender);
+        }
+        let response = service
+            .lock()
+            .await
+            .handle_with_cancellation(envelope, Some(receiver))
+            .await;
+        cancellations.lock().await.remove(&active_request_id);
+        return response;
+    }
+
+    service.lock().await.handle(envelope).await
+}
+
+fn duplicate_request_response(request_id: String) -> ResponseEnvelope {
+    ResponseEnvelope {
+        version: PROTOCOL_VERSION,
+        request_id,
+        response: ProtocolResponse::Error {
+            error: ProtocolErrorBody {
+                code: ProtocolErrorCode::MalformedRequest,
+                message: "request identifier is already active".to_owned(),
+            },
+        },
+    }
 }
 
 async fn read_frame<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Vec<u8>, DaemonError> {
@@ -135,6 +197,8 @@ async fn read_frame<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Vec<u8>, Dae
 }
 
 #[cfg(test)]
+// The transport helpers below the tests are intentionally kept next to their production callers.
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use tokio::io::{AsyncWriteExt, duplex};
 
@@ -166,10 +230,7 @@ mod tests {
         let (mut writer, mut reader) = duplex(64);
         writer.write_all(b"{\"part\":").await.unwrap();
         writer.write_all(b"true}\n").await.unwrap();
-        assert_eq!(
-            read_frame(&mut reader).await.unwrap(),
-            b"{\"part\":true}\n"
-        );
+        assert_eq!(read_frame(&mut reader).await.unwrap(), b"{\"part\":true}\n");
     }
 
     #[tokio::test]
@@ -195,11 +256,11 @@ mod tests {
 
     #[tokio::test]
     async fn handles_sequential_connections_and_protocol_errors() {
-        let mut service = HalquenService::new(
-            DryRunExecutor::new(),
-            Database::open_in_memory().unwrap(),
-        )
-        .unwrap();
+        let service = Arc::new(Mutex::new(
+            HalquenService::new(DryRunExecutor::new(), Database::open_in_memory().unwrap())
+                .unwrap(),
+        ));
+        let cancellations = Arc::new(Mutex::new(BTreeMap::new()));
 
         for request_id in ["request:first", "request:second"] {
             let (mut client, server) = duplex(MAX_FRAME_SIZE * 2);
@@ -213,11 +274,11 @@ mod tests {
                 .await
                 .unwrap();
             client.shutdown().await.unwrap();
-            handle_connection(server, &mut service).await.unwrap();
-            let response = halquen_protocol::decode_response(
-                &read_frame(&mut client).await.unwrap(),
-            )
-            .unwrap();
+            handle_connection(server, Arc::clone(&service), Arc::clone(&cancellations))
+                .await
+                .unwrap();
+            let response =
+                halquen_protocol::decode_response(&read_frame(&mut client).await.unwrap()).unwrap();
             assert_eq!(response.request_id, request_id);
         }
 
@@ -229,13 +290,64 @@ mod tests {
             let (mut client, server) = duplex(MAX_FRAME_SIZE * 2);
             client.write_all(raw).await.unwrap();
             client.shutdown().await.unwrap();
-            handle_connection(server, &mut service).await.unwrap();
+            handle_connection(
+                server,
+                Arc::clone(&service),
+                Arc::clone(&cancellations),
+            )
+            .await
+            .unwrap();
             let response = halquen_protocol::decode_response(
                 &read_frame(&mut client).await.unwrap(),
             )
             .unwrap();
             assert!(matches!(response.response, ProtocolResponse::Error { .. }));
         }
+    }
+
+    #[tokio::test]
+    async fn cancellation_bypasses_the_busy_service_lock() {
+        let service = Arc::new(Mutex::new(
+            HalquenService::new(DryRunExecutor::new(), Database::open_in_memory().unwrap())
+                .unwrap(),
+        ));
+        let cancellations = Arc::new(Mutex::new(BTreeMap::new()));
+        let (sender, mut receiver) = watch::channel(false);
+        cancellations
+            .lock()
+            .await
+            .insert("request:active-chat".to_owned(), sender);
+
+        let (mut client, server) = duplex(MAX_FRAME_SIZE * 2);
+        let request = RequestEnvelope {
+            version: PROTOCOL_VERSION,
+            request_id: "request:cancel".to_owned(),
+            request: ProtocolRequest::CancelChat {
+                request_id: "request:active-chat".to_owned(),
+            },
+        };
+        client
+            .write_all(&halquen_protocol::encode_request(&request).unwrap())
+            .await
+            .unwrap();
+        client.shutdown().await.unwrap();
+
+        let _busy_service = service.lock().await;
+        timeout(
+            Duration::from_secs(1),
+            handle_connection(server, Arc::clone(&service), Arc::clone(&cancellations)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        receiver.changed().await.unwrap();
+        assert!(*receiver.borrow());
+        let response =
+            halquen_protocol::decode_response(&read_frame(&mut client).await.unwrap()).unwrap();
+        assert!(matches!(
+            response.response,
+            ProtocolResponse::ChatCancellation { requested: true }
+        ));
     }
 
     #[test]

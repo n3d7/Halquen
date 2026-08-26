@@ -1,7 +1,4 @@
-use crate::{
-    CapabilityId,
-    EntityId,
-};
+use crate::{CapabilityId, EntityId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,9 +13,7 @@ pub enum ActionArgumentKind {
 pub enum ActionArguments {
     None,
 
-    OpenApp {
-        app: EntityId,
-    },
+    OpenApp { app: EntityId },
 }
 
 impl ActionArguments {
@@ -37,10 +32,7 @@ pub struct ActionRequest {
 }
 
 impl ActionRequest {
-    pub fn new(
-        capability_id: CapabilityId,
-        arguments: ActionArguments,
-    ) -> Self {
+    pub fn new(capability_id: CapabilityId, arguments: ActionArguments) -> Self {
         Self {
             capability_id,
             arguments,

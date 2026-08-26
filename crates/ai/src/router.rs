@@ -51,7 +51,11 @@ impl ModelRouter {
                         && provider.configured
                         && provider_supported(provider.kind)
                         && provider.privacy == model.privacy
-                        && privacy_allowed(settings, provider.privacy, request.contains_personal_context)
+                        && privacy_allowed(
+                            settings,
+                            provider.privacy,
+                            request.contains_personal_context,
+                        )
                 })
         };
 
@@ -121,7 +125,7 @@ fn route_score(preset: RoutingPreset, model: &AiModel) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use halquen_domain::{ProviderStatus, ProviderKind};
+    use halquen_domain::{ProviderKind, ProviderStatus};
 
     use super::*;
 
@@ -164,11 +168,11 @@ mod tests {
         let result = ModelRouter.select(
             &settings,
             &[provider],
-            &[model.clone()],
+            std::slice::from_ref(&model),
             &RouteRequest {
                 task: AiTaskType::Conversation,
                 selection: ModelSelection::Model {
-                    model_id: model.id,
+                    model_id: model.id.clone(),
                 },
                 contains_personal_context: false,
             },
@@ -180,8 +184,10 @@ mod tests {
     fn zero_model_call_budget_disables_ai_before_route_selection() {
         let provider = provider(PrivacyClass::Local);
         let model = model(&provider);
-        let mut settings = ApplicationSettings::default();
-        settings.max_model_calls_per_request = 0;
+        let settings = ApplicationSettings {
+            max_model_calls_per_request: 0,
+            ..ApplicationSettings::default()
+        };
         let result = ModelRouter.select(
             &settings,
             &[provider],
@@ -201,9 +207,11 @@ mod tests {
         let cloud = provider(PrivacyClass::Cloud);
         let local_model = model(&local);
         let cloud_model = model(&cloud);
-        let mut settings = ApplicationSettings::default();
-        settings.allow_cloud_ai = true;
-        settings.routing_preset = RoutingPreset::PreferLocal;
+        let settings = ApplicationSettings {
+            allow_cloud_ai: true,
+            routing_preset: RoutingPreset::PreferLocal,
+            ..ApplicationSettings::default()
+        };
         let selected = ModelRouter
             .select(
                 &settings,

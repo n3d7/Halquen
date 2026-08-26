@@ -2,15 +2,12 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use halquen_audit::{
-    AuditEvent, AuditRecord, ExecutionReceipt, ExecutionStatus, SafeResultCode,
+use halquen_ai::{
+    DisabledProviderClient, KeyringSecretStore, OpenAiCompatibleClient, ProviderClient, SecretStore,
 };
+use halquen_audit::{AuditEvent, AuditRecord, ExecutionReceipt, ExecutionStatus, SafeResultCode};
 use halquen_capabilities::{
     CapabilityRegistry, ExecutionResultCode, Executor, open_app_descriptor,
-};
-use halquen_ai::{
-    DisabledProviderClient, KeyringSecretStore, OpenAiCompatibleClient, ProviderClient,
-    SecretStore,
 };
 use halquen_domain::{ActionRequest, AuditId, CapabilityDescriptor, DiagnosticEntry, ExecutionId};
 use halquen_policy::{PolicyEngine, PolicyOutcome};
@@ -19,6 +16,7 @@ use halquen_protocol::{
     ProtocolResponse, RequestEnvelope, ResponseEnvelope,
 };
 use halquen_storage::Database;
+use tokio::sync::watch;
 use tokio::time::timeout;
 
 pub struct HalquenService<E> {
@@ -93,22 +91,37 @@ impl<E: Executor> HalquenService<E> {
     }
 
     pub async fn handle(&mut self, envelope: RequestEnvelope) -> ResponseEnvelope {
+        self.handle_with_cancellation(envelope, None).await
+    }
+
+    pub(crate) async fn handle_with_cancellation(
+        &mut self,
+        envelope: RequestEnvelope,
+        cancellation: Option<watch::Receiver<bool>>,
+    ) -> ResponseEnvelope {
         let request_id = envelope.request_id;
         let response = match envelope.request {
             ProtocolRequest::Health => self.health(),
             ProtocolRequest::ListCapabilities => Ok(ProtocolResponse::Capabilities {
                 capabilities: self.registry.list().cloned().collect(),
             }),
-            ProtocolRequest::GetCapability { capability_id } => {
-                Ok(ProtocolResponse::Capability {
-                    capability: self.registry.get(&capability_id).cloned(),
-                })
-            }
+            ProtocolRequest::GetCapability { capability_id } => Ok(ProtocolResponse::Capability {
+                capability: self.registry.get(&capability_id).cloned(),
+            }),
             ProtocolRequest::EvaluateAction { action } => self.evaluate_action(action),
             ProtocolRequest::DryRunAction { action } => self.dry_run_action(action).await,
             ProtocolRequest::MemoryStats => self.memory_stats(),
             ProtocolRequest::AuditStats => self.audit_stats(),
-            ProtocolRequest::Chat { request } => self.chat(request, &request_id).await,
+            ProtocolRequest::Chat { request } => match cancellation {
+                Some(signal) => {
+                    self.chat_with_cancellation(request, &request_id, signal)
+                        .await
+                }
+                None => self.chat(request, &request_id).await,
+            },
+            ProtocolRequest::CancelChat { .. } => {
+                Ok(ProtocolResponse::ChatCancellation { requested: false })
+            }
             ProtocolRequest::ListChatSessions { limit } => self.list_chat_sessions(limit),
             ProtocolRequest::ListChatMessages { session_id, limit } => {
                 self.list_chat_messages(&session_id, limit)
@@ -124,9 +137,7 @@ impl<E: Executor> HalquenService<E> {
             ProtocolRequest::ListProviders => self.list_providers(),
             ProtocolRequest::UpsertProvider { provider } => self.upsert_provider(provider),
             ProtocolRequest::RemoveProvider { provider_id } => self.remove_provider(&provider_id),
-            ProtocolRequest::TestProvider { provider_id } => {
-                self.test_provider(&provider_id).await
-            }
+            ProtocolRequest::TestProvider { provider_id } => self.test_provider(&provider_id).await,
             ProtocolRequest::ListModels => self.list_models(),
             ProtocolRequest::UpsertModel { model } => self.upsert_model(model),
             ProtocolRequest::GetApplicationSettings => self.application_settings(),
@@ -135,6 +146,7 @@ impl<E: Executor> HalquenService<E> {
             }
             ProtocolRequest::GetUsageStats => self.usage_stats(),
             ProtocolRequest::GetDiagnostics { limit } => self.diagnostics(limit),
+            ProtocolRequest::ClearOperationalLogs => self.clear_operational_logs(),
             ProtocolRequest::SubmitResponseFeedback {
                 cache_entry_id,
                 feedback,
@@ -197,9 +209,7 @@ impl<E: Executor> HalquenService<E> {
             },
         };
         self.database.append_audit(&audit).map_err(internal_error)?;
-        Ok(ProtocolResponse::Evaluation {
-            decision,
-        })
+        Ok(ProtocolResponse::Evaluation { decision })
     }
 
     pub(crate) async fn dry_run_action(
@@ -340,22 +350,20 @@ impl<E: Executor> HalquenService<E> {
             .record_execution(&receipt, &audit_records)
             .map_err(internal_error)?;
 
-        Ok(ProtocolResponse::DryRun {
-            decision,
-            receipt,
-        })
+        Ok(ProtocolResponse::DryRun { decision, receipt })
     }
 
     pub(crate) fn descriptor_for(
         &self,
         action: &halquen_domain::ActionRequest,
     ) -> Result<&CapabilityDescriptor, ProtocolErrorBody> {
-        let descriptor = self.registry.get(&action.capability_id).ok_or_else(|| {
-            ProtocolErrorBody {
-                code: ProtocolErrorCode::NotFound,
-                message: "capability is not registered".to_owned(),
-            }
-        })?;
+        let descriptor =
+            self.registry
+                .get(&action.capability_id)
+                .ok_or_else(|| ProtocolErrorBody {
+                    code: ProtocolErrorCode::NotFound,
+                    message: "capability is not registered".to_owned(),
+                })?;
         if action.arguments.kind() != descriptor.arguments {
             return Err(ProtocolErrorBody {
                 code: ProtocolErrorCode::InvalidAction,
@@ -452,10 +460,7 @@ mod tests {
             version: PROTOCOL_VERSION,
             request_id: "request:test".to_owned(),
             request: ProtocolRequest::DryRunAction {
-                action: ActionRequest::new(
-                    CapabilityId::new(id).unwrap(),
-                    ActionArguments::None,
-                ),
+                action: ActionRequest::new(CapabilityId::new(id).unwrap(), ActionArguments::None),
             },
         }
     }
@@ -492,8 +497,16 @@ mod tests {
     #[tokio::test]
     async fn confirm_and_deny_never_reach_executor_or_started_audit() {
         for (id, risk, expected) in [
-            ("test.external", RiskClass::ExternalSideEffect, PolicyOutcome::Confirm),
-            ("test.privileged", RiskClass::Privileged, PolicyOutcome::Deny),
+            (
+                "test.external",
+                RiskClass::ExternalSideEffect,
+                PolicyOutcome::Confirm,
+            ),
+            (
+                "test.privileged",
+                RiskClass::Privileged,
+                PolicyOutcome::Deny,
+            ),
         ] {
             let mut service = service(vec![capability(id, risk)]);
             let response = service.handle(dry_run(id)).await;
@@ -512,12 +525,11 @@ mod tests {
                 .unwrap();
             assert!(!kinds.iter().any(|kind| kind == "execution_started"));
             assert!(kinds.iter().any(|kind| {
-                kind
-                    == if expected == PolicyOutcome::Confirm {
-                        "confirmation_required"
-                    } else {
-                        "action_denied"
-                    }
+                kind == if expected == PolicyOutcome::Confirm {
+                    "confirmation_required"
+                } else {
+                    "action_denied"
+                }
             }));
         }
     }

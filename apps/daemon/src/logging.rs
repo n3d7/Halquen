@@ -90,6 +90,41 @@ pub fn redact(value: &str) -> String {
     output.join(" ")
 }
 
+pub(crate) fn clear_historical_logs() -> Result<u64, LoggingError> {
+    let directory = prepare_log_directory()?;
+    let removed = clear_historical_logs_in(&directory)?;
+    u64::try_from(removed).map_err(|_| {
+        LoggingError::Io(std::io::Error::other(
+            "historical log count exceeded supported bounds",
+        ))
+    })
+}
+
+fn clear_historical_logs_in(directory: &Path) -> Result<usize, LoggingError> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file()
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("halquen.log")
+        {
+            files.push(entry.path());
+        }
+    }
+    files.sort();
+
+    // The daily appender's lexicographically newest file is the active log. Keep it so
+    // clearing history never unlinks the file that the logging worker is still writing.
+    files.pop();
+    let removed = files.len();
+    for path in files {
+        fs::remove_file(path)?;
+    }
+    Ok(removed)
+}
+
 fn prepare_log_directory() -> Result<PathBuf, LoggingError> {
     let state_home = match env::var_os("XDG_STATE_HOME") {
         Some(value) => PathBuf::from(value),
@@ -123,8 +158,12 @@ fn prune_logs(
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let metadata = entry.metadata().ok()?;
-            (metadata.is_file() && entry.file_name().to_string_lossy().starts_with("halquen.log"))
-                .then_some((entry.path(), metadata.len(), metadata.modified().ok()?))
+            (metadata.is_file()
+                && entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("halquen.log"))
+            .then_some((entry.path(), metadata.len(), metadata.modified().ok()?))
         })
         .collect::<Vec<_>>();
     files.sort_by_key(|(_, _, modified)| *modified);
@@ -168,10 +207,12 @@ mod tests {
 
     #[test]
     fn logging_policy_uses_validated_application_settings() {
-        let mut settings = ApplicationSettings::default();
-        settings.log_level = LogLevel::Debug;
-        settings.log_retention_days = 12;
-        settings.log_max_total_mb = 48;
+        let mut settings = ApplicationSettings {
+            log_level: LogLevel::Debug,
+            log_retention_days: 12,
+            log_max_total_mb: 48,
+            ..ApplicationSettings::default()
+        };
         let policy = logging_policy(&settings);
         assert_eq!(policy.level, tracing::Level::DEBUG);
         assert_eq!(policy.retention, Duration::from_secs(12 * 24 * 60 * 60));
@@ -179,5 +220,23 @@ mod tests {
 
         settings.diagnostic_logging = false;
         assert_eq!(logging_policy(&settings).level, tracing::Level::ERROR);
+    }
+
+    #[test]
+    fn clearing_history_preserves_active_log_and_unrelated_files() {
+        let directory =
+            std::env::temp_dir().join(format!("halquen-log-cleanup-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("halquen.log.2026-08-24"), b"old").unwrap();
+        fs::write(directory.join("halquen.log.2026-08-25"), b"current").unwrap();
+        fs::write(directory.join("notes.txt"), b"unrelated").unwrap();
+
+        assert_eq!(clear_historical_logs_in(&directory).unwrap(), 1);
+        assert!(!directory.join("halquen.log.2026-08-24").exists());
+        assert!(directory.join("halquen.log.2026-08-25").exists());
+        assert!(directory.join("notes.txt").exists());
+
+        fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -366,7 +366,10 @@ impl Database {
                 message.input_tokens,
                 message.output_tokens,
                 latency_ms,
-                message.reusable_candidate_id.as_ref().map(CacheEntryId::as_str),
+                message
+                    .reusable_candidate_id
+                    .as_ref()
+                    .map(CacheEntryId::as_str),
                 message.created_at_ms,
             ],
         )?;
@@ -404,7 +407,10 @@ impl Database {
             || event.correlation_id.len() > 128
             || event.summary.trim().is_empty()
             || event.summary.len() > 1_024
-            || event.detail.as_ref().is_some_and(|value| value.len() > 4_096)
+            || event
+                .detail
+                .as_ref()
+                .is_some_and(|value| value.len() > 4_096)
         {
             return Err(StorageError::InvalidInteraction(
                 "activity event is outside accepted bounds".to_owned(),
@@ -622,12 +628,11 @@ impl Database {
     }
 
     pub fn cached_response_count(&self) -> Result<u64, StorageError> {
-        let count: i64 = self
-            .connection
-            .query_row("SELECT COUNT(*) FROM response_cache", [], |row| row.get(0))?;
-        u64::try_from(count).map_err(|_| {
-            StorageError::InvalidInteraction("negative cache count".to_owned())
-        })
+        let count: i64 =
+            self.connection
+                .query_row("SELECT COUNT(*) FROM response_cache", [], |row| row.get(0))?;
+        u64::try_from(count)
+            .map_err(|_| StorageError::InvalidInteraction("negative cache count".to_owned()))
     }
 
     pub fn add_usage(&mut self, delta: UsageStats) -> Result<(), StorageError> {
@@ -657,8 +662,8 @@ impl Database {
                 estimated_tokens_avoided = estimated_tokens_avoided + ?10
              WHERE singleton_id = 1",
             params![
-                values[0], values[1], values[2], values[3], values[4],
-                values[5], values[6], values[7], values[8], values[9],
+                values[0], values[1], values[2], values[3], values[4], values[5], values[6],
+                values[7], values[8], values[9],
             ],
         )?;
         Ok(())
@@ -714,21 +719,32 @@ impl Database {
         )?;
         let base = rows.collect::<Result<Vec<_>, _>>()?;
         base.into_iter()
-            .map(|(item, mut current, evidence_count, priority_permille, confidence_permille, pinned, disabled, last_used_at_ms)| {
-                let (evidence_ids, trust_classes) = self.revision_evidence(&current.id)?;
-                current.evidence_ids = evidence_ids;
-                Ok(MemoryView {
+            .map(
+                |(
                     item,
-                    current,
+                    mut current,
                     evidence_count,
-                    trust_classes,
                     priority_permille,
                     confidence_permille,
                     pinned,
                     disabled,
                     last_used_at_ms,
-                })
-            })
+                )| {
+                    let (evidence_ids, trust_classes) = self.revision_evidence(&current.id)?;
+                    current.evidence_ids = evidence_ids;
+                    Ok(MemoryView {
+                        item,
+                        current,
+                        evidence_count,
+                        trust_classes,
+                        priority_permille,
+                        confidence_permille,
+                        pinned,
+                        disabled,
+                        last_used_at_ms,
+                    })
+                },
+            )
             .collect()
     }
 
@@ -794,7 +810,8 @@ impl Database {
                         id: item.current_revision_id.clone(),
                         memory_id: item.id.clone(),
                         previous_revision_id: optional_memory_revision_id(row.get(5)?)?,
-                        value: serde_json::from_str(&row.get::<_, String>(6)?).map_err(json_error)?,
+                        value: serde_json::from_str(&row.get::<_, String>(6)?)
+                            .map_err(json_error)?,
                         evidence_ids: Vec::new(),
                         created_at_ms: row.get(7)?,
                         valid_from_ms: row.get(8)?,
@@ -873,7 +890,8 @@ impl Database {
                         id: item.current_revision_id.clone(),
                         memory_id: item.id.clone(),
                         previous_revision_id: optional_memory_revision_id(row.get(5)?)?,
-                        value: serde_json::from_str(&row.get::<_, String>(6)?).map_err(json_error)?,
+                        value: serde_json::from_str(&row.get::<_, String>(6)?)
+                            .map_err(json_error)?,
                         evidence_ids: Vec::new(),
                         created_at_ms: row.get(7)?,
                         valid_from_ms: row.get(8)?,
@@ -990,10 +1008,7 @@ fn chat_message_from_row(row: &Row<'_>) -> rusqlite::Result<ChatMessage> {
             .get::<_, Option<String>>(6)?
             .map(provider_id)
             .transpose()?,
-        model_id: row
-            .get::<_, Option<String>>(7)?
-            .map(model_id)
-            .transpose()?,
+        model_id: row.get::<_, Option<String>>(7)?.map(model_id).transpose()?,
         input_tokens: row.get(8)?,
         output_tokens: row.get(9)?,
         latency_ms: row
@@ -1248,23 +1263,52 @@ mod tests {
             estimated_tokens_avoided: 0,
         };
         database.store_response_candidate(&entry).unwrap();
-        assert!(database.cached_response("what is halquen", "global", 2).unwrap().is_none());
-        database.apply_response_feedback(&entry.id, ResponseFeedback::AlwaysUse).unwrap();
-        assert!(database.cached_response("what is halquen", "global", 2).unwrap().is_some());
+        assert!(
+            database
+                .cached_response("what is halquen", "global", 2)
+                .unwrap()
+                .is_none()
+        );
+        database
+            .apply_response_feedback(&entry.id, ResponseFeedback::AlwaysUse)
+            .unwrap();
+        assert!(
+            database
+                .cached_response("what is halquen", "global", 2)
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
     fn stale_cache_is_rejected() {
         let mut database = Database::open_in_memory().unwrap();
         let entry = CachedResponse {
-            id: CacheEntryId::generate(), normalized_request: "status".to_owned(), response: "old".to_owned(),
-            context_key: "global".to_owned(), confidence_permille: 900, priority_permille: 500,
-            trust: TrustClass::LocalVerified, valid_until_ms: Some(5), reusable: true, created_at_ms: 1,
-            last_used_at_ms: None, usage_count: 0, success_count: 0, correction_count: 0,
-            original_provider_id: None, original_model_id: None, estimated_tokens_avoided: 0,
+            id: CacheEntryId::generate(),
+            normalized_request: "status".to_owned(),
+            response: "old".to_owned(),
+            context_key: "global".to_owned(),
+            confidence_permille: 900,
+            priority_permille: 500,
+            trust: TrustClass::LocalVerified,
+            valid_until_ms: Some(5),
+            reusable: true,
+            created_at_ms: 1,
+            last_used_at_ms: None,
+            usage_count: 0,
+            success_count: 0,
+            correction_count: 0,
+            original_provider_id: None,
+            original_model_id: None,
+            estimated_tokens_avoided: 0,
         };
         database.store_response_candidate(&entry).unwrap();
-        assert!(database.cached_response("status", "global", 6).unwrap().is_none());
+        assert!(
+            database
+                .cached_response("status", "global", 6)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

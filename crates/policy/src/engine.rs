@@ -67,12 +67,7 @@ impl PolicyEngine {
         action: ActionRequest,
         execution_id: ExecutionId,
     ) -> PolicyEvaluation {
-        self.authorize_with_context(
-            capability,
-            action,
-            execution_id,
-            &PolicyContext::default(),
-        )
+        self.authorize_with_context(capability, action, execution_id, &PolicyContext::default())
     }
 
     pub fn authorize_with_context(
@@ -82,7 +77,8 @@ impl PolicyEngine {
         execution_id: ExecutionId,
         context: &PolicyContext,
     ) -> PolicyEvaluation {
-        if action.capability_id != capability.id || action.arguments.kind() != capability.arguments {
+        if action.capability_id != capability.id || action.arguments.kind() != capability.arguments
+        {
             return blocked(PolicyOutcome::Deny, PolicyReason::InvalidActionContract);
         }
 
@@ -107,7 +103,8 @@ impl PolicyEngine {
         execution_id: ExecutionId,
         context: &PolicyContext,
     ) -> PolicyEvaluation {
-        if action.capability_id != capability.id || action.arguments.kind() != capability.arguments {
+        if action.capability_id != capability.id || action.arguments.kind() != capability.arguments
+        {
             return blocked(PolicyOutcome::Deny, PolicyReason::InvalidActionContract);
         }
         let initial = self.decide(capability, context);
@@ -131,11 +128,7 @@ impl PolicyEngine {
         PolicyEvaluation::allowed(decision, authorization)
     }
 
-    fn decide(
-        &self,
-        capability: &CapabilityDescriptor,
-        context: &PolicyContext,
-    ) -> PolicyDecision {
+    fn decide(&self, capability: &CapabilityDescriptor, context: &PolicyContext) -> PolicyDecision {
         if capability.validate().is_err() {
             return decision(PolicyOutcome::Deny, PolicyReason::InvalidDescriptor);
         }
@@ -145,12 +138,10 @@ impl PolicyEngine {
         }
 
         match capability.risk {
-            RiskClass::Privileged => {
-                PolicyDecision {
-                    outcome: PolicyOutcome::Deny,
-                    reason: PolicyReason::PrivilegedDenied,
-                }
-            }
+            RiskClass::Privileged => PolicyDecision {
+                outcome: PolicyOutcome::Deny,
+                reason: PolicyReason::PrivilegedDenied,
+            },
             RiskClass::Unknown => PolicyDecision {
                 outcome: PolicyOutcome::Deny,
                 reason: PolicyReason::UnknownRiskDenied,
@@ -241,7 +232,8 @@ mod tests {
         for risk in [RiskClass::ExternalSideEffect, RiskClass::Destructive] {
             let descriptor = descriptor(risk);
             let action = ActionRequest::new(descriptor.id.clone(), ActionArguments::None);
-            let result = PolicyEngine::new().authorize(&descriptor, action, ExecutionId::generate());
+            let result =
+                PolicyEngine::new().authorize(&descriptor, action, ExecutionId::generate());
             assert_eq!(result.decision.outcome, PolicyOutcome::Confirm);
             assert!(result.authorization().is_none());
         }
@@ -252,7 +244,8 @@ mod tests {
         for risk in [RiskClass::Privileged, RiskClass::Unknown] {
             let descriptor = descriptor(risk);
             let action = ActionRequest::new(descriptor.id.clone(), ActionArguments::None);
-            let result = PolicyEngine::new().authorize(&descriptor, action, ExecutionId::generate());
+            let result =
+                PolicyEngine::new().authorize(&descriptor, action, ExecutionId::generate());
             assert_eq!(result.decision.outcome, PolicyOutcome::Deny);
             assert!(result.authorization().is_none());
         }
@@ -315,11 +308,8 @@ mod tests {
                 app: EntityId::new("app:discord").unwrap(),
             },
         );
-        let evaluation = PolicyEngine::new().authorize(
-            &v1,
-            telegram.clone(),
-            ExecutionId::generate(),
-        );
+        let evaluation =
+            PolicyEngine::new().authorize(&v1, telegram.clone(), ExecutionId::generate());
         let authorization = evaluation.authorization().unwrap();
         assert!(authorization.matches(&v1, &telegram));
         assert!(!authorization.matches(&v1, &discord));

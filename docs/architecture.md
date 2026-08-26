@@ -7,7 +7,7 @@ React renderer
     │ typed invoke commands only
     ▼
 Tauri Rust bridge
-    │ halquen-protocol v2
+    │ halquen-protocol v3
     ▼
 private Unix socket
     ▼
@@ -95,3 +95,7 @@ Operational logs, activity events, and audit records are distinct:
 - audit stores durable security/execution lifecycle records.
 
 The current-thread daemon is event-driven and performs no idle polling or background model calls.
+Socket connections are handled as concurrent Tokio tasks while authority-bearing service operations
+remain serialized. A typed cancellation request bypasses that service lock, signals only its exact
+active chat request ID, and causes the pending provider future to be dropped before its result can be
+used.

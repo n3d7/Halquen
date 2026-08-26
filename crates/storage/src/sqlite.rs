@@ -67,12 +67,8 @@ impl Database {
             fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
         }
         configure_connection(&connection)?;
-        let journal_mode: String = connection.pragma_update_and_check(
-            None,
-            "journal_mode",
-            "WAL",
-            |row| row.get(0),
-        )?;
+        let journal_mode: String =
+            connection.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))?;
         if !journal_mode.eq_ignore_ascii_case("wal") {
             return Err(StorageError::WalUnavailable(journal_mode));
         }
@@ -90,9 +86,11 @@ impl Database {
 
     pub fn schema_version(&self) -> Result<i64, StorageError> {
         self.connection
-            .query_row("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                [],
+                |row| row.get(0),
+            )
             .map_err(Into::into)
     }
 
@@ -120,9 +118,9 @@ impl Database {
     }
 
     pub fn audit_event_kinds(&self, subject_id: &str) -> Result<Vec<String>, StorageError> {
-        let mut statement = self.connection.prepare(
-            "SELECT event_kind FROM events WHERE subject_id = ?1 ORDER BY rowid",
-        )?;
+        let mut statement = self
+            .connection
+            .prepare("SELECT event_kind FROM events WHERE subject_id = ?1 ORDER BY rowid")?;
         let rows = statement.query_map([subject_id], |row| row.get(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -172,9 +170,7 @@ impl Database {
                 "memory value does not match the declared memory kind".to_owned(),
             ));
         }
-        if item.updated_at_ms != revision.created_at_ms
-            || item.updated_at_ms < item.created_at_ms
-        {
+        if item.updated_at_ms != revision.created_at_ms || item.updated_at_ms < item.created_at_ms {
             return Err(StorageError::InvalidMemoryChange(
                 "memory timestamps are inconsistent".to_owned(),
             ));
@@ -504,7 +500,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StorageError> {
     Ok(())
 }
 
-fn insert_execution(transaction: &Transaction<'_>, receipt: &ExecutionReceipt) -> Result<(), StorageError> {
+fn insert_execution(
+    transaction: &Transaction<'_>,
+    receipt: &ExecutionReceipt,
+) -> Result<(), StorageError> {
     transaction.execute(
         "INSERT INTO executions(
             id, capability_id, capability_version, started_at_ms, finished_at_ms, policy_json,
@@ -531,7 +530,11 @@ fn insert_execution(transaction: &Transaction<'_>, receipt: &ExecutionReceipt) -
 fn insert_audit(transaction: &Transaction<'_>, record: &AuditRecord) -> Result<(), StorageError> {
     transaction.execute(
         "INSERT INTO audit_records(id, created_at_ms, event_json) VALUES (?1, ?2, ?3)",
-        params![record.id.as_str(), record.created_at_ms, serde_json::to_string(&record.event)?],
+        params![
+            record.id.as_str(),
+            record.created_at_ms,
+            serde_json::to_string(&record.event)?
+        ],
     )?;
     Ok(())
 }
@@ -557,9 +560,7 @@ fn insert_event_for_audit(
         AuditEvent::ConfirmationRequired { execution_id, .. } => {
             ("confirmation_required", execution_id.as_str())
         }
-        AuditEvent::ActionDenied { execution_id, .. } => {
-            ("action_denied", execution_id.as_str())
-        }
+        AuditEvent::ActionDenied { execution_id, .. } => ("action_denied", execution_id.as_str()),
         AuditEvent::ExecutionStarted { execution_id, .. } => {
             ("execution_started", execution_id.as_str())
         }
@@ -572,9 +573,7 @@ fn insert_event_for_audit(
         AuditEvent::ExecutionTimedOut { execution_id, .. } => {
             ("execution_timed_out", execution_id.as_str())
         }
-        AuditEvent::MemoryRevision { memory_id, .. } => {
-            ("memory_revision", memory_id.as_str())
-        }
+        AuditEvent::MemoryRevision { memory_id, .. } => ("memory_revision", memory_id.as_str()),
     };
     transaction.execute(
         "INSERT INTO events(id, event_kind, subject_id, created_at_ms) VALUES (?1, ?2, ?3, ?4)",
@@ -816,16 +815,14 @@ mod tests {
             let database = Database::open(&path.database).unwrap();
             let migrations: i64 = database
                 .connection
-                .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
+                .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                    row.get(0)
+                })
                 .unwrap();
             assert_eq!(migrations, 2);
         }
         assert_eq!(
-            fs::metadata(&path.database)
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
+            fs::metadata(&path.database).unwrap().permissions().mode() & 0o777,
             0o600
         );
     }
@@ -891,7 +888,9 @@ mod tests {
         apply_migrations(&mut database.connection).unwrap();
         let count: i64 = database
             .connection
-            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(count, 2);
     }
@@ -952,9 +951,11 @@ mod tests {
             valid_from_ms: Some(1),
             valid_until_ms: None,
         };
-        assert!(database
-            .persist_memory_revision(&item, &revision, &[evidence])
-            .is_err());
+        assert!(
+            database
+                .persist_memory_revision(&item, &revision, &[evidence])
+                .is_err()
+        );
         assert_eq!(database.memory_stats().unwrap().items, 0);
     }
 
@@ -970,9 +971,11 @@ mod tests {
                 vec![referenced.id.clone()],
                 1,
             );
-            assert!(database
-                .persist_memory_revision(&item, &revision, &[referenced, unrelated])
-                .is_err());
+            assert!(
+                database
+                    .persist_memory_revision(&item, &revision, &[referenced, unrelated])
+                    .is_err()
+            );
             assert_eq!(database.memory_stats().unwrap().items, 0);
         }
     }
@@ -1004,7 +1007,7 @@ mod tests {
             1,
         );
         database
-            .persist_memory_revision(&first_item, &first_revision, &[trusted.clone()])
+            .persist_memory_revision(&first_item, &first_revision, std::slice::from_ref(&trusted))
             .unwrap();
         let (second_item, second_revision) = successor(
             &first_item,
@@ -1029,9 +1032,11 @@ mod tests {
             vec![trusted.id.clone()],
             1,
         );
-        assert!(database
-            .persist_memory_revision(&spoofed_item, &spoofed_revision, &[trusted])
-            .is_err());
+        assert!(
+            database
+                .persist_memory_revision(&spoofed_item, &spoofed_revision, &[trusted])
+                .is_err()
+        );
 
         let semantic_evidence = evidence(TrustClass::ExternalContent, 2);
         let (first_item, first_revision) = first_change(
@@ -1052,9 +1057,11 @@ mod tests {
             3,
         );
         changed_item.kind = MemoryKind::Procedural;
-        assert!(database
-            .persist_memory_revision(&changed_item, &changed_revision, &[update_evidence])
-            .is_err());
+        assert!(
+            database
+                .persist_memory_revision(&changed_item, &changed_revision, &[update_evidence])
+                .is_err()
+        );
         assert_eq!(database.memory_stats().unwrap().revisions, 1);
     }
 
@@ -1132,9 +1139,11 @@ mod tests {
             vec![stale_evidence.id.clone()],
             3,
         );
-        assert!(database
-            .persist_memory_revision(&stale_item, &stale_revision, &[stale_evidence])
-            .is_err());
+        assert!(
+            database
+                .persist_memory_revision(&stale_item, &stale_revision, &[stale_evidence])
+                .is_err()
+        );
 
         let mismatch_evidence = evidence(TrustClass::ExternalContent, 4);
         let (mismatch_item, mut mismatch_revision) = first_change(
@@ -1144,13 +1153,11 @@ mod tests {
             4,
         );
         mismatch_revision.memory_id = MemoryId::generate();
-        assert!(database
-            .persist_memory_revision(
-                &mismatch_item,
-                &mismatch_revision,
-                &[mismatch_evidence],
-            )
-            .is_err());
+        assert!(
+            database
+                .persist_memory_revision(&mismatch_item, &mismatch_revision, &[mismatch_evidence],)
+                .is_err()
+        );
         assert_eq!(database.memory_stats().unwrap().revisions, 2);
     }
 
@@ -1193,8 +1200,10 @@ mod tests {
             vec![next_evidence.id.clone()],
             2,
         );
-        assert!(database
-            .persist_memory_revision(&next_item, &next_revision, &[next_evidence])
-            .is_err());
+        assert!(
+            database
+                .persist_memory_revision(&next_item, &next_revision, &[next_evidence])
+                .is_err()
+        );
     }
 }

@@ -2,9 +2,17 @@ use halquen_domain::EntityId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalIntent {
-    OpenApp { display_name: String, entity_id: EntityId },
-    RememberPreference { key: String, value: String },
-    ForgetPreference { key: String },
+    OpenApp {
+        display_name: String,
+        entity_id: EntityId,
+    },
+    RememberPreference {
+        key: String,
+        value: String,
+    },
+    ForgetPreference {
+        key: String,
+    },
 }
 
 pub fn resolve_local(message: &str) -> Option<LocalIntent> {
@@ -59,7 +67,11 @@ fn parse_remember(message: &str) -> Option<LocalIntent> {
     let normalized = message.trim().trim_end_matches(['.', '!', '?']);
     let lower = normalized.to_lowercase();
 
-    for prefix in ["remember that when i say ", "запомни, что когда я говорю ", "запомни что когда я говорю "] {
+    for prefix in [
+        "remember that when i say ",
+        "запомни, что когда я говорю ",
+        "запомни что когда я говорю ",
+    ] {
         if lower.starts_with(prefix) {
             let remainder = &normalized[prefix.len()..];
             let lower_remainder = remainder.to_lowercase();
@@ -74,7 +86,13 @@ fn parse_remember(message: &str) -> Option<LocalIntent> {
         }
     }
 
-    for prefix in ["remember that my ", "запомни, что мой ", "запомни что мой ", "запомни, что моя ", "запомни что моя "] {
+    for prefix in [
+        "remember that my ",
+        "запомни, что мой ",
+        "запомни что мой ",
+        "запомни, что моя ",
+        "запомни что моя ",
+    ] {
         if lower.starts_with(prefix) {
             let remainder = &normalized[prefix.len()..];
             let lower_remainder = remainder.to_lowercase();

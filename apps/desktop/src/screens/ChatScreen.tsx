@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { ChevronDown, MessageSquarePlus, Send, ShieldCheck, Sparkles } from "lucide-react";
+import { ChevronDown, MessageSquarePlus, Send, ShieldCheck, Sparkles, Square } from "lucide-react";
 import { daemon, commandMessage } from "../lib/daemon";
 import type {
   AiModel,
@@ -77,6 +77,7 @@ function Message({ message, onFeedback }: { message: ChatMessage; onFeedback: (i
           <button onClick={() => void submit("useful")}>Useful</button>
           <button onClick={() => void submit("wrong")}>Wrong</button>
           <button onClick={() => void submit("do_not_remember")}>Don't reuse</button>
+          <button onClick={() => void submit("prefer")}>Prefer</button>
           <button onClick={() => void submit("always_use")}>Always reuse</button>
           {feedbackState ? <span>{feedbackState}</span> : null}
         </div>
@@ -111,6 +112,7 @@ export function ChatScreen({ daemonOnline, onOpenAi }: { daemonOnline: boolean; 
   const [modelValue, setModelValue] = useState("automatic");
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [cancellationRequested, setCancellationRequested] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<ConfirmationPrompt | null>(null);
   const [confirmationResult, setConfirmationResult] = useState<string | null>(null);
@@ -118,6 +120,7 @@ export function ChatScreen({ daemonOnline, onOpenAi }: { daemonOnline: boolean; 
   const [previewBusy, setPreviewBusy] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const activeRequestRef = useRef<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -163,11 +166,14 @@ export function ChatScreen({ daemonOnline, onOpenAi }: { daemonOnline: boolean; 
     if (!message || busy || !daemonOnline) return;
     setDraft("");
     setBusy(true);
+    setCancellationRequested(false);
     setError(null);
     setConfirmation(null);
     setConfirmationResult(null);
+    const requestId = `request:chat:${crypto.randomUUID()}`;
+    activeRequestRef.current = requestId;
     try {
-      const result = await daemon.sendChat(requestFor(message));
+      const result = await daemon.sendChat(requestId, requestFor(message));
       setSessionId(result.session.id);
       setSessions((current) => [result.session, ...current.filter((item) => item.id !== result.session.id)]);
       setMessages((current) => [...current, result.user_message, result.assistant_message]);
@@ -176,8 +182,26 @@ export function ChatScreen({ daemonOnline, onOpenAi }: { daemonOnline: boolean; 
       setDraft(message);
       setError(commandMessage(reason));
     } finally {
+      if (activeRequestRef.current === requestId) activeRequestRef.current = null;
       setBusy(false);
+      setCancellationRequested(false);
       composerRef.current?.focus();
+    }
+  }
+
+  async function cancelRequest() {
+    const requestId = activeRequestRef.current;
+    if (!requestId || cancellationRequested) return;
+    setError(null);
+    try {
+      const requested = await daemon.cancelChat(requestId);
+      if (requested) {
+        setCancellationRequested(true);
+      } else {
+        setError("The request already completed or is no longer cancellable.");
+      }
+    } catch (reason) {
+      setError(commandMessage(reason));
     }
   }
 
@@ -254,7 +278,7 @@ export function ChatScreen({ daemonOnline, onOpenAi }: { daemonOnline: boolean; 
           ) : messages.map((message) => (
             <Message key={message.id} message={message} onFeedback={(id, feedback) => daemon.feedback(id, feedback)} />
           ))}
-          {busy ? <div className="processing"><Spinner label="Processing request" /><span>Checking local routes, then eligible AI if needed…</span></div> : null}
+          {busy ? <div className="processing"><Spinner label={cancellationRequested ? "Cancelling request" : "Processing request"} /><span>{cancellationRequested ? "Cancellation requested; waiting for the daemon to stop the provider call…" : "Checking local routes, then eligible AI if needed…"}</span></div> : null}
           {confirmation ? <Confirmation prompt={confirmation} onDone={confirm} /> : null}
           {confirmationResult ? <div className="inline-success">{confirmationResult}</div> : null}
           {error ? <ErrorNotice message={error} /> : null}
@@ -275,9 +299,15 @@ export function ChatScreen({ daemonOnline, onOpenAi }: { daemonOnline: boolean; 
             <Button variant="ghost" aria-label="Preview AI request" title="Preview AI request" disabled={!draft.trim() || busy || previewBusy} onClick={() => void showPreview()}>
               {previewBusy ? <Spinner /> : <Sparkles size={18} />}
             </Button>
-            <Button variant="primary" aria-label="Send message" disabled={!draft.trim() || busy || !daemonOnline} onClick={() => void send()}>
-              <Send size={18} />
-            </Button>
+            {busy ? (
+              <Button variant="danger" aria-label="Cancel request" title="Cancel request" disabled={cancellationRequested} onClick={() => void cancelRequest()}>
+                <Square size={16} />
+              </Button>
+            ) : (
+              <Button variant="primary" aria-label="Send message" disabled={!draft.trim() || !daemonOnline} onClick={() => void send()}>
+                <Send size={18} />
+              </Button>
+            )}
           </div>
           <span>Enter to send · Shift+Enter for a new line</span>
         </footer>
