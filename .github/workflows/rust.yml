@@ -1,4 +1,4 @@
-name: Rust CI
+name: CI
 
 on:
   push:
@@ -13,20 +13,56 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  rust:
-    runs-on: ubuntu-latest
+  verify:
+    runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
+      - name: Install Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            wget \
+            xdg-utils
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install pnpm
+        run: npm install --global pnpm@11.19.0
+
+      - name: Install frontend dependencies
+        run: pnpm --dir apps/desktop install --frozen-lockfile
 
       - name: Check formatting
         run: cargo fmt --all --check
 
       - name: Check workspace
-        run: cargo check --workspace --all-targets --locked
+        run: cargo check --workspace --all-targets --all-features --locked
 
       - name: Run tests
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --all-features --locked
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Frontend typecheck
+        run: pnpm --dir apps/desktop typecheck
+
+      - name: Frontend tests
+        run: pnpm --dir apps/desktop test
+
+      - name: Frontend build
+        run: pnpm --dir apps/desktop build

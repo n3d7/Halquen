@@ -31,6 +31,27 @@ LLM output is advice.
 Capabilities, policy, and trusted memory are authority.
 ```
 
+## Release artifacts
+
+Halquen v0.1.0 is a Linux x86-64 pre-release. The portable archive contains the CLI and daemon:
+
+- `halquen-v0.1.0-x86_64-unknown-linux-gnu.tar.gz`
+- `SHA256SUMS`
+
+Verify and install it without root privileges:
+
+```bash
+sha256sum -c SHA256SUMS
+tar -xzf halquen-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+install -Dm755 halquen-v0.1.0-x86_64-unknown-linux-gnu/halquen ~/.local/bin/halquen
+install -Dm755 halquen-v0.1.0-x86_64-unknown-linux-gnu/halquen-daemon ~/.local/bin/halquen-daemon
+```
+
+Desktop bundles are published as separate AppImage, Debian, or RPM assets when the corresponding
+Tauri packager succeeds. The desktop is a client, not a daemon supervisor: start
+`halquen-daemon` separately before using either the desktop or CLI. This release does not install
+a system service, enable autostart, or provide an automatic updater.
+
 ## Development
 
 Start the daemon in one terminal:

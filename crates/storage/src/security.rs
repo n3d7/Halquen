@@ -77,6 +77,46 @@ impl Database {
             .map_err(Into::into)
     }
 
+    pub fn active_permission_grant_for_proposal(
+        &self,
+        proposal: &ActionProposal,
+        session: Option<&PermissionSessionScope>,
+        agent_id: Option<&AgentId>,
+        now_ms: i64,
+    ) -> Result<Option<PermissionGrant>, StorageError> {
+        let scope_json = serde_json::to_string(&PermissionScope::from_proposal(proposal))?;
+        let session_kind = session.map(permission_session_kind);
+        let session_id = session.map(permission_session_id);
+        let agent_id = agent_id.map(AgentId::as_str);
+        self.connection
+            .query_row(
+                "SELECT id, effect, lifetime, scope_json, session_kind, session_id, agent_id,
+                        granted_by, granted_at_ms, expires_at_ms, revoked_at_ms, use_limit, use_count
+                 FROM permission_grants
+                 WHERE capability_id = ?1 AND scope_json = ?2
+                   AND revoked_at_ms IS NULL
+                   AND (expires_at_ms IS NULL OR expires_at_ms >= ?3)
+                   AND (use_limit IS NULL OR use_count < use_limit)
+                   AND ((lifetime != 'session' AND session_kind IS NULL AND session_id IS NULL)
+                        OR (lifetime = 'session' AND session_kind IS ?4 AND session_id IS ?5))
+                   AND ((agent_id IS NULL AND ?6 IS NULL) OR agent_id = ?6)
+                 ORDER BY CASE effect WHEN 'deny' THEN 0 ELSE 1 END,
+                          granted_at_ms DESC, id
+                 LIMIT 1",
+                params![
+                    proposal.action.capability_id.as_str(),
+                    scope_json,
+                    now_ms,
+                    session_kind,
+                    session_id,
+                    agent_id,
+                ],
+                permission_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     pub fn upsert_permission_grant(&mut self, grant: &PermissionGrant) -> Result<(), StorageError> {
         grant
             .validate()
@@ -253,47 +293,41 @@ impl Database {
         kind: ResourceKind,
         identifier: &str,
     ) -> Result<Option<ResourceLabel>, StorageError> {
-        let mut matches = self
-            .list_resource_labels(200)?
-            .into_iter()
-            .filter(|label| {
-                label.resource_kind == kind
-                    && match label.match_kind {
-                        ResourceMatchKind::Exact => identifier == label.pattern,
-                        ResourceMatchKind::PathPrefix => {
-                            identifier == label.pattern
-                                || identifier
-                                    .strip_prefix(&label.pattern)
-                                    .is_some_and(|suffix| {
-                                        label.pattern.ends_with('/') || suffix.starts_with('/')
-                                    })
-                        }
-                        ResourceMatchKind::Host => {
-                            identifier == label.pattern
-                                || identifier
-                                    .strip_suffix(&label.pattern)
-                                    .is_some_and(|prefix| prefix.ends_with('.'))
-                        }
-                    }
-            })
-            .collect::<Vec<_>>();
-        matches.sort_by(|left, right| match (left.match_kind, right.match_kind) {
-            (ResourceMatchKind::Exact, ResourceMatchKind::Exact)
-            | (ResourceMatchKind::PathPrefix, ResourceMatchKind::PathPrefix)
-            | (ResourceMatchKind::Host, ResourceMatchKind::Host) => right
-                .pattern
-                .len()
-                .cmp(&left.pattern.len())
-                .then_with(|| left.id.cmp(&right.id)),
-            (ResourceMatchKind::Exact, _) => std::cmp::Ordering::Less,
-            (_, ResourceMatchKind::Exact) => std::cmp::Ordering::Greater,
-            _ => right
-                .pattern
-                .len()
-                .cmp(&left.pattern.len())
-                .then_with(|| left.id.cmp(&right.id)),
-        });
-        Ok(matches.into_iter().next())
+        self.connection
+            .query_row(
+                "SELECT id, name, resource_kind, match_kind, pattern, classification,
+                        data_classification, created_at_ms, updated_at_ms
+                 FROM resource_labels
+                 WHERE resource_kind = ?1
+                   AND (
+                       (match_kind = 'exact' AND pattern = ?2)
+                       OR (match_kind = 'path_prefix' AND (
+                           pattern = ?2
+                           OR (
+                               substr(?2, 1, length(pattern)) = pattern
+                               AND (
+                                   substr(pattern, -1, 1) = '/'
+                                   OR substr(?2, length(pattern) + 1, 1) = '/'
+                               )
+                           )
+                       ))
+                       OR (match_kind = 'host' AND (
+                           pattern = ?2
+                           OR (
+                               length(?2) > length(pattern)
+                               AND substr(?2, -length(pattern)) = pattern
+                               AND substr(?2, length(?2) - length(pattern), 1) = '.'
+                           )
+                       ))
+                   )
+                 ORDER BY CASE match_kind WHEN 'exact' THEN 0 ELSE 1 END,
+                          length(pattern) DESC, id
+                 LIMIT 1",
+                params![resource_kind(kind), identifier],
+                resource_label_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     pub fn remove_resource_label(&mut self, id: &ResourceLabelId) -> Result<bool, StorageError> {
@@ -760,6 +794,71 @@ mod tests {
     }
 
     #[test]
+    fn authority_lookup_does_not_truncate_an_older_exact_deny() {
+        let mut database = Database::open_in_memory().unwrap();
+        let target = ActionProposal::new(
+            ActionRequest::new(
+                CapabilityId::new("system.open_app").unwrap(),
+                ActionArguments::OpenApp {
+                    app: EntityId::new("app:target").unwrap(),
+                },
+            ),
+            ActionContext::trusted_user(None).with_resource(ResourceDescriptor {
+                kind: ResourceKind::Application,
+                identifier: "app:target".to_owned(),
+                classification: ResourceClassification::Local,
+            }),
+        )
+        .unwrap();
+        let permission = |effect, proposal: &ActionProposal, granted_at_ms| PermissionGrant {
+            id: PermissionId::generate(),
+            effect,
+            lifetime: PermissionLifetime::Always,
+            scope: PermissionScope::from_proposal(proposal),
+            session: None,
+            agent_id: None,
+            granted_by: ActionOrigin::UserExplicit,
+            granted_at_ms,
+            expires_at_ms: None,
+            revoked_at_ms: None,
+            use_limit: None,
+            use_count: 0,
+        };
+        database
+            .upsert_permission_grant(&permission(PermissionEffect::Deny, &target, 1))
+            .unwrap();
+        for index in 0..200_i64 {
+            let filler = ActionProposal::new(
+                ActionRequest::new(
+                    CapabilityId::new("system.open_app").unwrap(),
+                    ActionArguments::OpenApp {
+                        app: EntityId::new(format!("app:filler-{index:03}")).unwrap(),
+                    },
+                ),
+                ActionContext::trusted_user(None).with_resource(ResourceDescriptor {
+                    kind: ResourceKind::Application,
+                    identifier: format!("app:filler-{index:03}"),
+                    classification: ResourceClassification::Local,
+                }),
+            )
+            .unwrap();
+            database
+                .upsert_permission_grant(&permission(PermissionEffect::Allow, &filler, index + 2))
+                .unwrap();
+        }
+        database
+            .upsert_permission_grant(&permission(PermissionEffect::Allow, &target, 1_000))
+            .unwrap();
+
+        let decisive = database
+            .active_permission_grant_for_proposal(&target, None, None, 10_000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(decisive.effect, PermissionEffect::Deny);
+        assert!(decisive.scope.matches(&target));
+    }
+
+    #[test]
     fn behaviour_storage_is_bounded() {
         let mut database = Database::open_in_memory().unwrap();
         for timestamp in 0..520_i64 {
@@ -820,6 +919,76 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(label.classification, ResourceClassification::Production);
+    }
+
+    #[test]
+    fn resource_label_lookup_is_not_limited_by_the_display_page() {
+        let mut database = Database::open_in_memory().unwrap();
+        for index in 0..200_i64 {
+            database
+                .upsert_resource_label(&ResourceLabel {
+                    id: ResourceLabelId::generate(),
+                    name: format!("a-filler-{index:03}"),
+                    resource_kind: ResourceKind::File,
+                    match_kind: ResourceMatchKind::Exact,
+                    pattern: format!("/tmp/filler-{index:03}"),
+                    classification: ResourceClassification::Local,
+                    data_classification: DataClassification::Personal,
+                    created_at_ms: index,
+                    updated_at_ms: index,
+                })
+                .unwrap();
+        }
+        database
+            .upsert_resource_label(&ResourceLabel {
+                id: ResourceLabelId::generate(),
+                name: "zz-target".to_owned(),
+                resource_kind: ResourceKind::Application,
+                match_kind: ResourceMatchKind::Exact,
+                pattern: "app:target".to_owned(),
+                classification: ResourceClassification::SystemCritical,
+                data_classification: DataClassification::Sensitive,
+                created_at_ms: 1_000,
+                updated_at_ms: 1_000,
+            })
+            .unwrap();
+
+        let label = database
+            .resource_label_for(ResourceKind::Application, "app:target")
+            .unwrap()
+            .unwrap();
+        assert_eq!(label.classification, ResourceClassification::SystemCritical);
+    }
+
+    #[test]
+    fn resource_label_host_match_requires_a_dot_boundary() {
+        let mut database = Database::open_in_memory().unwrap();
+        database
+            .upsert_resource_label(&ResourceLabel {
+                id: ResourceLabelId::generate(),
+                name: "example".to_owned(),
+                resource_kind: ResourceKind::NetworkEndpoint,
+                match_kind: ResourceMatchKind::Host,
+                pattern: "example.com".to_owned(),
+                classification: ResourceClassification::Sensitive,
+                data_classification: DataClassification::Sensitive,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+            })
+            .unwrap();
+
+        assert!(
+            database
+                .resource_label_for(ResourceKind::NetworkEndpoint, "api.example.com")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            database
+                .resource_label_for(ResourceKind::NetworkEndpoint, "notexample.com")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

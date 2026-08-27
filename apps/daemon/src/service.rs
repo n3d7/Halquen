@@ -12,8 +12,9 @@ use halquen_capabilities::{
     Executor, SharedApplicationRegistry, open_app_descriptor,
 };
 use halquen_domain::{
-    ActionContext, ActionProposal, AuditId, CapabilityDescriptor, DaemonSession, DaemonSessionId,
-    DiagnosticEntry, ExecutionId, ProposalId,
+    ActionArguments, ActionContext, ActionProposal, ActionRequest, AuditId, CapabilityDescriptor,
+    DaemonSession, DaemonSessionId, DiagnosticEntry, ExecutionId, PermissionSessionScope,
+    ProposalId, ResourceClassification, ResourceDescriptor, ResourceKind,
 };
 use halquen_policy::{PolicyContext, PolicyEngine, PolicyOutcome, PolicyReason};
 use halquen_protocol::{
@@ -283,11 +284,10 @@ impl<E: Executor> HalquenService<E> {
 
     fn evaluate_action(
         &mut self,
-        action: halquen_domain::ActionRequest,
+        action: ActionRequest,
     ) -> Result<ProtocolResponse, ProtocolErrorBody> {
         let descriptor = self.descriptor_for(&action)?.clone();
-        let proposal = ActionProposal::new(action, ActionContext::trusted_user(None))
-            .map_err(|_| invalid_action_context())?;
+        let proposal = self.trusted_user_proposal(action)?;
         let context = self.policy_context(&proposal, None)?;
         let decision = self
             .policy
@@ -308,20 +308,41 @@ impl<E: Executor> HalquenService<E> {
 
     pub(crate) async fn dry_run_action(
         &mut self,
-        action: halquen_domain::ActionRequest,
+        action: ActionRequest,
     ) -> Result<ProtocolResponse, ProtocolErrorBody> {
-        let proposal = ActionProposal::new(action, ActionContext::trusted_user(None))
-            .map_err(|_| invalid_action_context())?;
+        let proposal = self.trusted_user_proposal(action)?;
         self.dry_run_proposal(proposal, None).await
     }
 
     pub(crate) async fn execute_action(
         &mut self,
-        action: halquen_domain::ActionRequest,
+        action: ActionRequest,
     ) -> Result<ProtocolResponse, ProtocolErrorBody> {
-        let proposal = ActionProposal::new(action, ActionContext::trusted_user(None))
-            .map_err(|_| invalid_action_context())?;
+        let proposal = self.trusted_user_proposal(action)?;
         self.execute_proposal(proposal, None).await
+    }
+
+    fn trusted_user_proposal(
+        &self,
+        action: ActionRequest,
+    ) -> Result<ActionProposal, ProtocolErrorBody> {
+        let context = match &action.arguments {
+            ActionArguments::None => ActionContext::trusted_user(None),
+            ActionArguments::OpenApp { app } => {
+                let identifier = app.as_str().to_owned();
+                let classification = self
+                    .database
+                    .resource_label_for(ResourceKind::Application, &identifier)
+                    .map_err(internal_error)?
+                    .map_or(ResourceClassification::Local, |label| label.classification);
+                ActionContext::trusted_user(None).with_resource(ResourceDescriptor {
+                    kind: ResourceKind::Application,
+                    identifier,
+                    classification,
+                })
+            }
+        };
+        ActionProposal::new(action, context).map_err(|_| invalid_action_context())
     }
 
     pub(crate) async fn dry_run_proposal(
@@ -571,9 +592,24 @@ impl<E: Executor> HalquenService<E> {
         context.set_profile(self.database.security_profile().map_err(internal_error)?);
         context.set_now_ms(timestamp);
         context.set_session_id(session_id.cloned());
-        for grant in self
+        let permission_session = if let Some(identity) = &proposal.context.agent {
+            Some(PermissionSessionScope::Agent(identity.session_id.clone()))
+        } else {
+            session_id.cloned().map(PermissionSessionScope::Chat)
+        };
+        let agent_id = proposal
+            .context
+            .agent
+            .as_ref()
+            .map(|identity| &identity.agent_id);
+        if let Some(grant) = self
             .database
-            .active_permission_grants(timestamp, 200)
+            .active_permission_grant_for_proposal(
+                proposal,
+                permission_session.as_ref(),
+                agent_id,
+                timestamp,
+            )
             .map_err(internal_error)?
         {
             context.add_permission_grant(grant);
@@ -642,9 +678,11 @@ mod tests {
     use halquen_capabilities::{ExecutionError, ExecutionOutcome};
     use halquen_domain::{
         ActionArgumentKind, ActionArguments, ActionRequest, CapabilityId, ConfirmationPolicy,
-        RiskClass,
+        EntityId, PermissionEffect, PermissionLifetime, ResourceClassification, ResourceDescriptor,
+        ResourceKind, RiskClass,
     };
     use halquen_policy::{ExecutionAuthorization, PolicyOutcome};
+    use halquen_protocol::PermissionGrantUpsert;
 
     use super::*;
 
@@ -779,6 +817,53 @@ mod tests {
                 }
             }));
         }
+    }
+
+    #[tokio::test]
+    async fn direct_open_app_exact_deny_blocks_the_executor() {
+        let mut service = service(vec![open_app_descriptor()]);
+        let app = EntityId::new("app:safe-fixture").unwrap();
+        service
+            .upsert_permission_grant(PermissionGrantUpsert {
+                id: None,
+                effect: PermissionEffect::Deny,
+                lifetime: PermissionLifetime::Always,
+                capability_id: CapabilityId::new("system.open_app").unwrap(),
+                arguments: ActionArguments::OpenApp { app: app.clone() },
+                resources: vec![ResourceDescriptor {
+                    kind: ResourceKind::Application,
+                    identifier: app.as_str().to_owned(),
+                    classification: ResourceClassification::Local,
+                }],
+                destination: None,
+                session: None,
+                agent_id: None,
+                expires_at_ms: None,
+            })
+            .unwrap();
+
+        let response = service
+            .handle(RequestEnvelope {
+                version: PROTOCOL_VERSION,
+                request_id: "request:open-app-deny".to_owned(),
+                request: ProtocolRequest::ExecuteAction {
+                    action: ActionRequest::new(
+                        CapabilityId::new("system.open_app").unwrap(),
+                        ActionArguments::OpenApp { app },
+                    ),
+                },
+            })
+            .await;
+
+        match response.response {
+            ProtocolResponse::Execution { decision, receipt } => {
+                assert_eq!(decision.outcome, PolicyOutcome::Deny);
+                assert_eq!(decision.reason, PolicyReason::PersistentExactDeny);
+                assert_eq!(receipt.status, ExecutionStatus::NotExecuted);
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+        assert_eq!(service.executor.calls.get(), 0);
     }
 
     #[tokio::test]
