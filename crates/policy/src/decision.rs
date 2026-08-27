@@ -12,6 +12,14 @@ pub enum PolicyOutcome {
     Deny,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfirmationLevel {
+    Standard,
+    Sensitive,
+    Destructive,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum PolicyReason {
@@ -28,12 +36,27 @@ pub enum PolicyReason {
     InvalidDescriptor,
     InvalidActionContract,
     UserConfirmedOnce,
+    InvalidProvenance,
+    ImmutableSecretExfiltrationDeny,
+    ImmutableProductionDestructiveDeny,
+    ImmutableSystemCriticalDeny,
+    UntrustedAuthorityMutationDenied,
+    SensitiveResourceRequiresConfirmation,
+    ProductionResourceRequiresConfirmation,
+    StrictProfileRequiresConfirmation,
+    PersistentExactAllow,
+    PersistentExactDeny,
+    AgentSideEffectRequiresConfirmation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyDecision {
     pub outcome: PolicyOutcome,
     pub reason: PolicyReason,
+    pub rule_id: String,
+    pub hard_deny: bool,
+    pub confirmation_level: Option<ConfirmationLevel>,
+    pub expires_at_ms: Option<i64>,
 }
 
 impl PolicyDecision {

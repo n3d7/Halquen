@@ -14,8 +14,15 @@ The current milestone includes:
   reusable-response candidates;
 - an OpenAI-compatible AI gateway for OpenAI, Ollama, LM Studio, and custom compatible endpoints;
 - provider/model routing with cloud/local privacy classes and bounded token/model-call budgets;
-- OS-keyring secret storage, typed SQLite settings, schema-v2 migrations, usage counters, activity,
+- OS-keyring secret storage, typed SQLite settings, schema-v4 migrations, usage counters, activity,
   structured audit records, and bounded operational logs.
+- typed action provenance, resource/data classification, deterministic immutable hard-deny rules,
+  scoped persistent permissions, and a Security/Permissions/Agents desktop control plane;
+- bounded recency-weighted application behaviour with correction-aware contextual resolution;
+- a daemon-brokered Agent Host with typed identities/sessions, safe capability discovery, bounded
+  two-phase JSON, deadlines, resource limits, and a fail-closed Bubblewrap backend;
+- an explicit real-execution mode whose only real capability is daemon-registered
+  `system.open_app`; the default mode remains dry-run.
 
 The invariant is:
 
@@ -46,10 +53,37 @@ cargo run -p halquen-cli --bin halquen -- health
 cargo run -p halquen-cli --bin halquen -- chat "Open Telegram"
 cargo run -p halquen-cli --bin halquen -- memory stats
 cargo run -p halquen-cli --bin halquen -- audit stats
+cargo run -p halquen-cli --bin halquen -- capabilities list
+cargo run -p halquen-cli --bin halquen -- applications list
+cargo run -p halquen-cli --bin halquen -- agents sessions
 ```
 
-`system.open_app` currently uses the safe dry-run executor. Halquen returns and audits a simulated
-result; it does not launch an application.
+The daemon starts in dry-run mode. `dry-run open-app` is always simulated, even when the daemon was
+started for real execution. Real execution must be selected explicitly:
+
+```bash
+cargo run -p halquen-daemon -- --execution-mode real
+cargo run -p halquen-cli --bin halquen -- applications register app:safe-fixture SafeFixture /usr/bin/true
+cargo run -p halquen-cli --bin halquen -- execute open-app app:safe-fixture
+```
+
+The real executor accepts only a registered application entity, revalidates its stored executable
+identity, and directly spawns the registered path and fixed arguments without a shell. AI and agents
+cannot supply executable paths. Filesystem, network, database, messaging, and generic process
+execution capabilities are not exposed.
+
+Configured CLI agents run only through the daemon broker. Their output is proposal data with no
+authority; every proposal re-enters normal policy and execution. Bubblewrap is the supported sandbox
+and missing support fails closed. Unsafe unsandboxed agents require the separate
+`--allow-unsafe-agents` daemon flag. Agent sessions are currently one-shot: a confirm-required
+proposal returns a safe result but is not kept alive for interactive confirmation; create an exact
+user grant and run the agent again.
+
+For a safe manual end-to-end check, use `/usr/bin/true` as shown above: verify `Succeeded`, then run
+`audit stats`. While the daemon remains in real mode, `dry-run open-app app:safe-fixture` must still
+report `DryRunSucceeded`. In the desktop Security screen, create an exact `Deny` permission for
+`app:safe-fixture`; another `execute` must report `Deny`/`NotExecuted`, produce no process launch,
+and add the policy-denial audit lifecycle. Revoke the fixture permission when finished.
 
 ## Local data
 

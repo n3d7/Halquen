@@ -10,6 +10,7 @@ import { ChatScreen } from "./screens/ChatScreen";
 import { DiagnosticsScreen } from "./screens/DiagnosticsScreen";
 import { MemoryScreen } from "./screens/MemoryScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
+import { SecurityScreen } from "./screens/SecurityScreen";
 
 function applyAppearance(appearance: ApplicationSettings["appearance"]) {
   document.documentElement.dataset.theme = appearance;
@@ -67,6 +68,9 @@ export default function App() {
       break;
     case "diagnostics":
       content = <DiagnosticsScreen />;
+      break;
+    case "security":
+      content = <SecurityScreen />;
       break;
     case "settings":
       content = <SettingsScreen onAppearanceChange={applyAppearance} />;

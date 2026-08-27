@@ -117,6 +117,13 @@ typed_id!(ChatMessageId, validate_opaque);
 typed_id!(ChatSessionId, validate_opaque);
 typed_id!(ModelId, validate_opaque);
 typed_id!(ProviderId, validate_opaque);
+typed_id!(PermissionId, validate_opaque);
+typed_id!(ResourceLabelId, validate_opaque);
+typed_id!(AgentId, validate_opaque);
+typed_id!(AgentInstanceId, validate_opaque);
+typed_id!(AgentSessionId, validate_opaque);
+typed_id!(DaemonSessionId, validate_opaque);
+typed_id!(BehaviourEventId, validate_opaque);
 
 fn generated_value(prefix: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -152,6 +159,13 @@ generated_id!(ChatMessageId, "message");
 generated_id!(ChatSessionId, "session");
 generated_id!(ModelId, "model");
 generated_id!(ProviderId, "provider");
+generated_id!(PermissionId, "permission");
+generated_id!(ResourceLabelId, "resource-label");
+generated_id!(AgentId, "agent");
+generated_id!(AgentInstanceId, "agent-instance");
+generated_id!(AgentSessionId, "agent-session");
+generated_id!(DaemonSessionId, "daemon-session");
+generated_id!(BehaviourEventId, "behaviour");
 
 #[cfg(test)]
 mod tests {

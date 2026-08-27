@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
+license.workspace = true
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }

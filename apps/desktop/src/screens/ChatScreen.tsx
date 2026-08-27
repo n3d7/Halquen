@@ -86,19 +86,41 @@ function Message({ message, onFeedback }: { message: ChatMessage; onFeedback: (i
   );
 }
 
-function Confirmation({ prompt, onDone }: { prompt: ConfirmationPrompt; onDone: (allow: boolean) => Promise<void> }) {
+function Confirmation({
+  prompt,
+  onDone,
+}: {
+  prompt: ConfirmationPrompt;
+  onDone: (allow: boolean, persistence: "once" | "session" | "until" | "always") => Promise<void>;
+}) {
   const [busy, setBusy] = useState(false);
+  const [persistence, setPersistence] = useState<"once" | "session" | "until" | "always">("once");
   return (
     <section className="confirmation" aria-label="Action confirmation">
       <ShieldCheck size={20} />
       <div>
         <strong>{prompt.title}</strong>
         <p>{prompt.reason}</p>
-        <small>Allow once. This approval expires automatically.</small>
+        <dl className="confirmation-detail">
+          <div><dt>Operation</dt><dd>{prompt.operation}</dd></div>
+          <div><dt>Target</dt><dd>{prompt.target}</dd></div>
+          <div><dt>Origin</dt><dd>{prompt.origin.replaceAll("_", " ")}</dd></div>
+          <div><dt>Classification</dt><dd>{prompt.resource_classifications.join(", ") || "local"}</dd></div>
+        </dl>
+        <Select
+          aria-label="Permission duration"
+          value={persistence}
+          onChange={(event) => setPersistence(event.target.value as typeof persistence)}
+        >
+          <option value="once">Allow once</option>
+          <option value="session">Allow for this session</option>
+          <option value="until">Allow for one hour</option>
+          <option value="always">Always allow this exact scope</option>
+        </Select>
       </div>
       <div className="confirmation-actions">
-        <Button disabled={busy} onClick={() => { setBusy(true); void onDone(false); }}>Cancel</Button>
-        <Button variant="primary" disabled={busy} onClick={() => { setBusy(true); void onDone(true); }}>Allow once</Button>
+        <Button disabled={busy} onClick={() => { setBusy(true); void onDone(false, "once"); }}>Cancel</Button>
+        <Button variant="primary" disabled={busy} onClick={() => { setBusy(true); void onDone(true, persistence); }}>Confirm</Button>
       </div>
     </section>
   );
@@ -205,10 +227,19 @@ export function ChatScreen({ daemonOnline, onOpenAi }: { daemonOnline: boolean; 
     }
   }
 
-  async function confirm(allow: boolean) {
+  async function confirm(
+    allow: boolean,
+    persistence: "once" | "session" | "until" | "always",
+  ) {
     if (!confirmation) return;
     try {
-      const result = await daemon.confirm(confirmation.confirmation_id, allow);
+      const expiry = persistence === "until" ? Date.now() + 60 * 60 * 1_000 : null;
+      const result = await daemon.confirm(
+        confirmation.confirmation_id,
+        allow,
+        persistence,
+        expiry,
+      );
       setConfirmationResult(result.message);
       setConfirmation(null);
     } catch (reason) {

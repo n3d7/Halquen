@@ -25,6 +25,16 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "desktop interaction and AI control plane",
         include_str!("../../../migrations/0002_desktop_interaction.sql"),
     ),
+    (
+        3,
+        "authority provenance policy and agent control plane",
+        include_str!("../../../migrations/0003_authority_layer.sql"),
+    ),
+    (
+        4,
+        "real execution registry and brokered agent sessions",
+        include_str!("../../../migrations/0004_real_execution_and_agent_broker.sql"),
+    ),
 ];
 
 pub struct Database {
@@ -544,6 +554,9 @@ fn insert_event_for_audit(
     record: &AuditRecord,
 ) -> Result<(), StorageError> {
     let (kind, subject_id) = match &record.event {
+        AuditEvent::ProposalCreated { execution_id, .. } => {
+            ("proposal_created", execution_id.as_str())
+        }
         AuditEvent::ActionRequested { execution_id, .. } => {
             ("action_requested", execution_id.as_str())
         }
@@ -560,6 +573,12 @@ fn insert_event_for_audit(
         AuditEvent::ConfirmationRequired { execution_id, .. } => {
             ("confirmation_required", execution_id.as_str())
         }
+        AuditEvent::ConfirmationReceived { execution_id, .. } => {
+            ("confirmation_received", execution_id.as_str())
+        }
+        AuditEvent::AuthorizationCreated { execution_id, .. } => {
+            ("authorization_created", execution_id.as_str())
+        }
         AuditEvent::ActionDenied { execution_id, .. } => ("action_denied", execution_id.as_str()),
         AuditEvent::ExecutionStarted { execution_id, .. } => {
             ("execution_started", execution_id.as_str())
@@ -572,6 +591,12 @@ fn insert_event_for_audit(
         }
         AuditEvent::ExecutionTimedOut { execution_id, .. } => {
             ("execution_timed_out", execution_id.as_str())
+        }
+        AuditEvent::AgentSessionStarted { session_id, .. } => {
+            ("agent_session_started", session_id.as_str())
+        }
+        AuditEvent::AgentSessionFinished { session_id, .. } => {
+            ("agent_session_finished", session_id.as_str())
         }
         AuditEvent::MemoryRevision { memory_id, .. } => ("memory_revision", memory_id.as_str()),
     };
@@ -647,6 +672,7 @@ fn trust_class(value: halquen_domain::TrustClass) -> &'static str {
 fn execution_status(value: ExecutionStatus) -> &'static str {
     match value {
         ExecutionStatus::DryRunSucceeded => "dry_run_succeeded",
+        ExecutionStatus::Succeeded => "succeeded",
         ExecutionStatus::Failed => "failed",
         ExecutionStatus::TimedOut => "timed_out",
         ExecutionStatus::NotExecuted => "not_executed",
@@ -656,6 +682,7 @@ fn execution_status(value: ExecutionStatus) -> &'static str {
 fn result_code(value: SafeResultCode) -> &'static str {
     match value {
         SafeResultCode::Simulated => "simulated",
+        SafeResultCode::Launched => "launched",
     }
 }
 
@@ -790,7 +817,7 @@ mod tests {
     #[test]
     fn fresh_database_runs_migration_and_enables_foreign_keys() {
         let database = Database::open_in_memory().unwrap();
-        assert_eq!(database.schema_version().unwrap(), 2);
+        assert_eq!(database.schema_version().unwrap(), 4);
         assert!(database.foreign_keys_enabled().unwrap());
     }
 
@@ -809,7 +836,7 @@ mod tests {
                 .unwrap();
             assert_eq!(journal.to_ascii_lowercase(), "wal");
             assert_eq!(busy_ms, 5_000);
-            assert_eq!(database.schema_version().unwrap(), 2);
+            assert_eq!(database.schema_version().unwrap(), 4);
         }
         {
             let database = Database::open(&path.database).unwrap();
@@ -819,7 +846,7 @@ mod tests {
                     row.get(0)
                 })
                 .unwrap();
-            assert_eq!(migrations, 2);
+            assert_eq!(migrations, 4);
         }
         assert_eq!(
             fs::metadata(&path.database).unwrap().permissions().mode() & 0o777,
@@ -892,7 +919,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 2);
+        assert_eq!(count, 4);
     }
 
     #[test]

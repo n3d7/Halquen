@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
-
+license.workspace = true
 
 [lib]
 path = "src/lib.rs"
@@ -12,9 +12,8 @@ path = "src/lib.rs"
 [dependencies]
 halquen-domain = { version = "0.1.0", path = "../domain" }
 halquen-policy = { version = "0.1.0", path = "../policy" }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
-
-[dev-dependencies]
 tokio = { workspace = true }
 
 [lints]

@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use halquen_capabilities::DryRunExecutor;
+use halquen_capabilities::{
+    ApplicationRegistry, DryRunExecutor, RealLinuxExecutor, RuntimeExecutor,
+};
 use halquen_protocol::{
     CodecError, MAX_FRAME_SIZE, PROTOCOL_VERSION, ProtocolErrorBody, ProtocolErrorCode,
     ProtocolRequest, ProtocolResponse, RequestEnvelope, ResponseEnvelope, RuntimePaths,
@@ -21,7 +23,7 @@ use tokio::time::timeout;
 use crate::service::HalquenService;
 
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
-type SharedService = Arc<Mutex<HalquenService<DryRunExecutor>>>;
+type SharedService = Arc<Mutex<HalquenService<RuntimeExecutor>>>;
 type CancellationRegistry = Arc<Mutex<BTreeMap<String, watch::Sender<bool>>>>;
 
 #[derive(Debug, Error)]
@@ -48,15 +50,43 @@ pub enum DaemonError {
     Logging(String),
 }
 
-pub async fn run() -> Result<(), DaemonError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExecutionMode {
+    #[default]
+    DryRun,
+    Real,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DaemonOptions {
+    pub execution_mode: ExecutionMode,
+    pub allow_unsafe_agents: bool,
+}
+
+pub async fn run(options: DaemonOptions) -> Result<(), DaemonError> {
     let data_paths = DataPaths::discover()?;
     data_paths.prepare()?;
     let database = Database::open(&data_paths.database)?;
     let settings = database.application_settings()?;
     let _log_guard = crate::logging::initialize(&settings)
         .map_err(|error| DaemonError::Logging(error.to_string()))?;
-    let mut service = HalquenService::new(DryRunExecutor::new(), database)
-        .map_err(|error| DaemonError::Initialization(error.to_string()))?;
+    let applications = Arc::new(std::sync::RwLock::new(
+        ApplicationRegistry::from_applications(database.list_registered_applications(200)?)
+            .map_err(|error| DaemonError::Initialization(error.to_string()))?,
+    ));
+    let executor = match options.execution_mode {
+        ExecutionMode::DryRun => RuntimeExecutor::DryRun(DryRunExecutor::new()),
+        ExecutionMode::Real => {
+            RuntimeExecutor::RealLinux(RealLinuxExecutor::new(Arc::clone(&applications)))
+        }
+    };
+    let mut service = HalquenService::new_with_application_registry(
+        executor,
+        database,
+        applications,
+        options.allow_unsafe_agents,
+    )
+    .map_err(|error| DaemonError::Initialization(error.to_string()))?;
 
     let runtime_paths = RuntimePaths::discover()?;
     service.set_environment(
@@ -97,6 +127,11 @@ pub async fn run() -> Result<(), DaemonError> {
             }
         }
     }
+    let mut service = service.lock().await;
+    let daemon_session_id = service.daemon_session_id.clone();
+    service
+        .database
+        .finish_daemon_session(&daemon_session_id, crate::service::now_ms())?;
     Ok(())
 }
 
@@ -257,8 +292,11 @@ mod tests {
     #[tokio::test]
     async fn handles_sequential_connections_and_protocol_errors() {
         let service = Arc::new(Mutex::new(
-            HalquenService::new(DryRunExecutor::new(), Database::open_in_memory().unwrap())
-                .unwrap(),
+            HalquenService::new(
+                RuntimeExecutor::DryRun(DryRunExecutor::new()),
+                Database::open_in_memory().unwrap(),
+            )
+            .unwrap(),
         ));
         let cancellations = Arc::new(Mutex::new(BTreeMap::new()));
 
@@ -308,8 +346,11 @@ mod tests {
     #[tokio::test]
     async fn cancellation_bypasses_the_busy_service_lock() {
         let service = Arc::new(Mutex::new(
-            HalquenService::new(DryRunExecutor::new(), Database::open_in_memory().unwrap())
-                .unwrap(),
+            HalquenService::new(
+                RuntimeExecutor::DryRun(DryRunExecutor::new()),
+                Database::open_in_memory().unwrap(),
+            )
+            .unwrap(),
         ));
         let cancellations = Arc::new(Mutex::new(BTreeMap::new()));
         let (sender, mut receiver) = watch::channel(false);

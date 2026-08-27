@@ -4,10 +4,16 @@ use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 
+pub mod behaviour;
 pub mod episodic;
 pub mod evidence;
 pub mod procedural;
 pub mod semantic;
+
+pub use behaviour::{
+    BehaviourScorer, DEFAULT_HALF_LIFE_MS, DEFAULT_MAX_EVENTS, DEFAULT_RETENTION_MS,
+    IntentResolution,
+};
 
 pub use episodic::EpisodicRecord;
 pub use evidence::{Evidence, MemoryEvidence};

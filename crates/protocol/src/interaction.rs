@@ -1,7 +1,12 @@
 use halquen_domain::{
-    AiModel, AiTaskType, ApplicationSettings, ChatMessage, ChatSession, ContextCategory,
-    ExecutionId, MemoryId, MemoryRevisionId, ModelId, ModelSelection, PrivacyClass, ProviderId,
-    ProviderKind, ProviderStatus,
+    ActionArgumentKind, ActionArguments, AgentConfiguration, AgentId, AgentResourceLimits,
+    AgentSession, AgentSessionId, AgentTransport, AiModel, AiTaskType, ApplicationSettings,
+    CapabilityId, ChatMessage, ChatSession, ContextCategory, DataClassification, DestinationClass,
+    EntityId, ExecutableOwnership, ExecutionId, MemoryId, MemoryRevisionId, ModelId,
+    ModelSelection, PermissionEffect, PermissionId, PermissionLifetime, PermissionSessionScope,
+    PrivacyClass, ProviderId, ProviderKind, ProviderStatus, RegisteredApplication,
+    ResourceClassification, ResourceDescriptor, ResourceKind, ResourceLabelId, ResourceMatchKind,
+    RiskClass, SandboxBackend, SecurityProfile,
 };
 use halquen_memory::MemoryKind;
 use serde::{Deserialize, Serialize};
@@ -27,6 +32,162 @@ pub struct ConfirmationPrompt {
     pub title: String,
     pub reason: String,
     pub expires_at_ms: i64,
+    pub operation: String,
+    pub target: String,
+    pub destination: Option<DestinationClass>,
+    pub origin: halquen_domain::ActionOrigin,
+    pub resource_classifications: Vec<ResourceClassification>,
+    pub agent_id: Option<AgentId>,
+    pub agent_session_id: Option<AgentSessionId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfirmationPersistence {
+    Once,
+    Session,
+    Until,
+    Always,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionGrantUpsert {
+    pub id: Option<PermissionId>,
+    pub effect: PermissionEffect,
+    pub lifetime: PermissionLifetime,
+    pub capability_id: halquen_domain::CapabilityId,
+    pub arguments: ActionArguments,
+    pub resources: Vec<ResourceDescriptor>,
+    pub destination: Option<DestinationClass>,
+    pub session: Option<PermissionSessionScope>,
+    pub agent_id: Option<AgentId>,
+    pub expires_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceLabelUpsert {
+    pub id: Option<ResourceLabelId>,
+    pub name: String,
+    pub resource_kind: ResourceKind,
+    pub match_kind: ResourceMatchKind,
+    pub pattern: String,
+    pub classification: ResourceClassification,
+    pub data_classification: DataClassification,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentConfigurationUpsert {
+    pub id: Option<AgentId>,
+    pub name: String,
+    pub transport: AgentTransport,
+    pub executable: String,
+    pub arguments: Vec<String>,
+    pub socket_path: Option<String>,
+    pub sandbox: SandboxBackend,
+    pub ownership: ExecutableOwnership,
+    pub sha256_hex: Option<String>,
+    pub resource_limits: AgentResourceLimits,
+    pub enabled: bool,
+    pub timeout_ms: u64,
+    pub max_stdout_bytes: u32,
+    pub max_stderr_bytes: u32,
+}
+
+impl AgentConfigurationUpsert {
+    pub fn into_configuration(
+        self,
+        now_ms: i64,
+        executable_identity: Option<halquen_domain::ExecutableIdentity>,
+    ) -> AgentConfiguration {
+        AgentConfiguration {
+            id: self.id.unwrap_or_else(AgentId::generate),
+            name: self.name,
+            transport: self.transport,
+            executable: self.executable,
+            arguments: self.arguments,
+            socket_path: self.socket_path,
+            sandbox: self.sandbox,
+            ownership: self.ownership,
+            executable_identity,
+            resource_limits: self.resource_limits,
+            enabled: self.enabled,
+            timeout_ms: self.timeout_ms,
+            max_stdout_bytes: self.max_stdout_bytes,
+            max_stderr_bytes: self.max_stderr_bytes,
+            created_at_ms: now_ms,
+            updated_at_ms: now_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecurityOverview {
+    pub profile: SecurityProfile,
+    pub immutable_rule_ids: Vec<String>,
+    pub active_permissions: u32,
+    pub resource_labels: u32,
+    pub configured_agents: u32,
+    pub active_agent_sessions: u32,
+    pub registered_applications: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApplicationRegistrationUpsert {
+    pub entity_id: EntityId,
+    pub display_name: String,
+    pub executable: String,
+    pub arguments: Vec<String>,
+    pub ownership: ExecutableOwnership,
+    pub sha256_hex: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRunRequest {
+    pub agent_id: AgentId,
+    pub input: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapabilityDiscovery {
+    pub id: CapabilityId,
+    pub version: u32,
+    pub description: String,
+    pub risk: RiskClass,
+    pub arguments: ActionArgumentKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProposalDisposition {
+    Executed,
+    Simulated,
+    ConfirmationRequired,
+    Denied,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentProposalResult {
+    pub index: u16,
+    pub capability_id: CapabilityId,
+    pub disposition: AgentProposalDisposition,
+    pub execution_id: Option<ExecutionId>,
+    pub confirmation: Option<ConfirmationPrompt>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRunResult {
+    pub session: AgentSession,
+    pub message: String,
+    pub proposals: Vec<AgentProposalResult>,
+    pub stderr_bytes: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApplicationRegistrationResult {
+    pub application: RegisteredApplication,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

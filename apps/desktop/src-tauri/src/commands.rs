@@ -1,12 +1,16 @@
 use halquen_domain::{
-    ActivityEvent, AiModel, ApplicationSettings, CacheEntryId, ChatMessage, ChatSession,
-    ChatSessionId, MemoryId, MemoryRevisionId, Provider, ProviderId, ResponseFeedback, UsageStats,
+    ActivityEvent, AgentConfiguration, AgentId, AgentSession, AiModel, ApplicationSettings,
+    CacheEntryId, ChatMessage, ChatSession, ChatSessionId, EntityId, MemoryId, MemoryRevisionId,
+    PermissionGrant, PermissionId, Provider, ProviderId, RegisteredApplication, ResourceLabel,
+    ResourceLabelId, ResponseFeedback, SecurityProfile, UsageStats,
 };
 use halquen_memory::{MemoryRevisionView, MemoryView};
 use halquen_protocol::{
-    ChatRequest, ChatResult, ConfirmationResult, DaemonClient, DiagnosticsSnapshot,
-    MemoryMutationReceipt, MemoryQuery, MemoryStateUpdate, ModelUpsert, PromptPreview,
-    ProtocolErrorBody, ProtocolRequest, ProtocolResponse, ProviderTestStatus, ProviderUpsert,
+    AgentConfigurationUpsert, AgentRunRequest, AgentRunResult, ApplicationRegistrationUpsert,
+    ChatRequest, ChatResult, ConfirmationPersistence, ConfirmationResult, DaemonClient,
+    DiagnosticsSnapshot, MemoryMutationReceipt, MemoryQuery, MemoryStateUpdate, ModelUpsert,
+    PermissionGrantUpsert, PromptPreview, ProtocolErrorBody, ProtocolRequest, ProtocolResponse,
+    ProviderTestStatus, ProviderUpsert, ResourceLabelUpsert, SecurityOverview,
 };
 use serde::Serialize;
 
@@ -278,10 +282,14 @@ pub async fn submit_response_feedback(
 pub async fn confirm_action(
     confirmation_id: String,
     allow: bool,
+    persistence: ConfirmationPersistence,
+    expires_at_ms: Option<i64>,
 ) -> Result<ConfirmationResult, CommandError> {
     match request(ProtocolRequest::ConfirmAction {
         confirmation_id,
         allow,
+        persistence,
+        expires_at_ms,
     })
     .await?
     {
@@ -294,6 +302,148 @@ pub async fn confirm_action(
 pub async fn preview_ai_request(input: ChatRequest) -> Result<PromptPreview, CommandError> {
     match request(ProtocolRequest::PreviewAiRequest { request: input }).await? {
         ProtocolResponse::AiRequestPreview { preview } => Ok(preview),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn get_security_overview() -> Result<SecurityOverview, CommandError> {
+    match request(ProtocolRequest::GetSecurityOverview).await? {
+        ProtocolResponse::SecurityOverview { overview } => Ok(overview),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn update_security_profile(
+    profile: SecurityProfile,
+) -> Result<SecurityProfile, CommandError> {
+    match request(ProtocolRequest::UpdateSecurityProfile { profile }).await? {
+        ProtocolResponse::SecurityProfileUpdated { profile } => Ok(profile),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn list_permission_grants(limit: u16) -> Result<Vec<PermissionGrant>, CommandError> {
+    match request(ProtocolRequest::ListPermissionGrants { limit }).await? {
+        ProtocolResponse::PermissionGrants { grants } => Ok(grants),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn upsert_permission_grant(
+    input: PermissionGrantUpsert,
+) -> Result<PermissionGrant, CommandError> {
+    match request(ProtocolRequest::UpsertPermissionGrant { grant: input }).await? {
+        ProtocolResponse::PermissionSaved { grant } => Ok(grant),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn revoke_permission_grant(permission_id: PermissionId) -> Result<bool, CommandError> {
+    match request(ProtocolRequest::RevokePermissionGrant { permission_id }).await? {
+        ProtocolResponse::PermissionRevoked { revoked } => Ok(revoked),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn list_resource_labels(limit: u16) -> Result<Vec<ResourceLabel>, CommandError> {
+    match request(ProtocolRequest::ListResourceLabels { limit }).await? {
+        ProtocolResponse::ResourceLabels { labels } => Ok(labels),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn upsert_resource_label(
+    input: ResourceLabelUpsert,
+) -> Result<ResourceLabel, CommandError> {
+    match request(ProtocolRequest::UpsertResourceLabel { label: input }).await? {
+        ProtocolResponse::ResourceLabelSaved { label } => Ok(label),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn remove_resource_label(
+    resource_label_id: ResourceLabelId,
+) -> Result<bool, CommandError> {
+    match request(ProtocolRequest::RemoveResourceLabel { resource_label_id }).await? {
+        ProtocolResponse::ResourceLabelRemoved { removed } => Ok(removed),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn list_agents(limit: u16) -> Result<Vec<AgentConfiguration>, CommandError> {
+    match request(ProtocolRequest::ListAgents { limit }).await? {
+        ProtocolResponse::Agents { agents } => Ok(agents),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn upsert_agent(
+    input: AgentConfigurationUpsert,
+) -> Result<AgentConfiguration, CommandError> {
+    match request(ProtocolRequest::UpsertAgent { agent: input }).await? {
+        ProtocolResponse::AgentSaved { agent } => Ok(agent),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn remove_agent(agent_id: AgentId) -> Result<bool, CommandError> {
+    match request(ProtocolRequest::RemoveAgent { agent_id }).await? {
+        ProtocolResponse::AgentRemoved { removed } => Ok(removed),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn run_agent(input: AgentRunRequest) -> Result<AgentRunResult, CommandError> {
+    match request(ProtocolRequest::RunAgent { request: input }).await? {
+        ProtocolResponse::AgentRun { result } => Ok(result),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn list_agent_sessions(limit: u16) -> Result<Vec<AgentSession>, CommandError> {
+    match request(ProtocolRequest::ListAgentSessions { limit }).await? {
+        ProtocolResponse::AgentSessions { sessions } => Ok(sessions),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn list_registered_applications(
+    limit: u16,
+) -> Result<Vec<RegisteredApplication>, CommandError> {
+    match request(ProtocolRequest::ListRegisteredApplications { limit }).await? {
+        ProtocolResponse::RegisteredApplications { applications } => Ok(applications),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn upsert_registered_application(
+    input: ApplicationRegistrationUpsert,
+) -> Result<RegisteredApplication, CommandError> {
+    match request(ProtocolRequest::UpsertRegisteredApplication { application: input }).await? {
+        ProtocolResponse::RegisteredApplicationSaved { application } => Ok(application),
+        _ => Err(unexpected()),
+    }
+}
+
+#[tauri::command]
+pub async fn remove_registered_application(entity_id: EntityId) -> Result<bool, CommandError> {
+    match request(ProtocolRequest::RemoveRegisteredApplication { entity_id }).await? {
+        ProtocolResponse::RegisteredApplicationRemoved { removed } => Ok(removed),
         _ => Err(unexpected()),
     }
 }

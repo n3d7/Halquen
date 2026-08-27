@@ -1561,6 +1561,7 @@ dependencies = [
 name = "halquen-ai"
 version = "0.1.0"
 dependencies = [
+ "halquen-capabilities",
  "halquen-domain",
  "keyring",
  "reqwest",
@@ -1587,6 +1588,7 @@ version = "0.1.0"
 dependencies = [
  "halquen-domain",
  "halquen-policy",
+ "sha2",
  "thiserror 2.0.20",
  "tokio",
 ]

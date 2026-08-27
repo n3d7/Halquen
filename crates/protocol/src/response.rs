@@ -1,7 +1,8 @@
 use halquen_audit::ExecutionReceipt;
 use halquen_domain::{
-    ActivityEvent, AiModel, ApplicationSettings, CapabilityDescriptor, ChatMessage, ChatSession,
-    Provider, UsageStats,
+    ActivityEvent, AgentConfiguration, AgentSession, AiModel, ApplicationSettings,
+    CapabilityDescriptor, ChatMessage, ChatSession, PermissionGrant, Provider,
+    RegisteredApplication, ResourceLabel, SecurityProfile, UsageStats,
 };
 use halquen_policy::PolicyDecision;
 use serde::{Deserialize, Serialize};
@@ -9,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use halquen_memory::{MemoryRevisionView, MemoryView};
 
 use crate::{
-    ChatResult, ConfirmationResult, DiagnosticsSnapshot, MemoryMutationReceipt, PromptPreview,
-    ProviderTestStatus,
+    AgentRunResult, ChatResult, ConfirmationResult, DiagnosticsSnapshot, MemoryMutationReceipt,
+    PromptPreview, ProviderTestStatus, SecurityOverview,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +41,10 @@ pub enum ProtocolResponse {
         decision: PolicyDecision,
     },
     DryRun {
+        decision: PolicyDecision,
+        receipt: ExecutionReceipt,
+    },
+    Execution {
         decision: PolicyDecision,
         receipt: ExecutionReceipt,
     },
@@ -120,6 +125,54 @@ pub enum ProtocolResponse {
     AiRequestPreview {
         preview: PromptPreview,
     },
+    SecurityOverview {
+        overview: SecurityOverview,
+    },
+    SecurityProfileUpdated {
+        profile: SecurityProfile,
+    },
+    PermissionGrants {
+        grants: Vec<PermissionGrant>,
+    },
+    PermissionSaved {
+        grant: PermissionGrant,
+    },
+    PermissionRevoked {
+        revoked: bool,
+    },
+    ResourceLabels {
+        labels: Vec<ResourceLabel>,
+    },
+    ResourceLabelSaved {
+        label: ResourceLabel,
+    },
+    ResourceLabelRemoved {
+        removed: bool,
+    },
+    Agents {
+        agents: Vec<AgentConfiguration>,
+    },
+    AgentSaved {
+        agent: AgentConfiguration,
+    },
+    AgentRemoved {
+        removed: bool,
+    },
+    AgentRun {
+        result: AgentRunResult,
+    },
+    AgentSessions {
+        sessions: Vec<AgentSession>,
+    },
+    RegisteredApplications {
+        applications: Vec<RegisteredApplication>,
+    },
+    RegisteredApplicationSaved {
+        application: RegisteredApplication,
+    },
+    RegisteredApplicationRemoved {
+        removed: bool,
+    },
     Error {
         error: ProtocolErrorBody,
     },
@@ -152,4 +205,5 @@ pub enum ProtocolErrorCode {
     ProviderUnavailable,
     SecretStoreUnavailable,
     ConfirmationExpired,
+    SandboxUnavailable,
 }

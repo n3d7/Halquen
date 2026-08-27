@@ -6,16 +6,18 @@ import {
   HeartPulse,
   MessageSquare,
   Settings,
+  ShieldCheck,
 } from "lucide-react";
 import { StatusBadge } from "./Common";
 
-export type Page = "chat" | "activity" | "memory" | "ai" | "diagnostics" | "settings";
+export type Page = "chat" | "activity" | "memory" | "ai" | "security" | "diagnostics" | "settings";
 
 const navigation: Array<{ page: Page; label: string; icon: typeof MessageSquare }> = [
   { page: "chat", label: "Chat", icon: MessageSquare },
   { page: "activity", label: "Activity", icon: Activity },
   { page: "memory", label: "Memory", icon: Brain },
   { page: "ai", label: "AI", icon: Bot },
+  { page: "security", label: "Security", icon: ShieldCheck },
   { page: "diagnostics", label: "Diagnostics", icon: HeartPulse },
   { page: "settings", label: "Settings", icon: Settings },
 ];

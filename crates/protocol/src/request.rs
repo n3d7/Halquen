@@ -1,10 +1,15 @@
 use halquen_domain::{
-    ActionRequest, ApplicationSettings, CacheEntryId, CapabilityId, ChatSessionId, MemoryId,
-    MemoryRevisionId, ProviderId, ResponseFeedback,
+    ActionRequest, AgentId, ApplicationSettings, CacheEntryId, CapabilityId, ChatSessionId,
+    EntityId, MemoryId, MemoryRevisionId, PermissionId, ProviderId, ResourceLabelId,
+    ResponseFeedback, SecurityProfile,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{ChatRequest, MemoryQuery, MemoryStateUpdate, ModelUpsert, ProviderUpsert};
+use crate::{
+    AgentConfigurationUpsert, AgentRunRequest, ApplicationRegistrationUpsert, ChatRequest,
+    ConfirmationPersistence, MemoryQuery, MemoryStateUpdate, ModelUpsert, PermissionGrantUpsert,
+    ProviderUpsert, ResourceLabelUpsert,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestEnvelope {
@@ -25,6 +30,9 @@ pub enum ProtocolRequest {
         action: ActionRequest,
     },
     DryRunAction {
+        action: ActionRequest,
+    },
+    ExecuteAction {
         action: ActionRequest,
     },
     MemoryStats,
@@ -88,8 +96,56 @@ pub enum ProtocolRequest {
     ConfirmAction {
         confirmation_id: String,
         allow: bool,
+        persistence: ConfirmationPersistence,
+        expires_at_ms: Option<i64>,
     },
     PreviewAiRequest {
         request: ChatRequest,
+    },
+    GetSecurityOverview,
+    UpdateSecurityProfile {
+        profile: SecurityProfile,
+    },
+    ListPermissionGrants {
+        limit: u16,
+    },
+    UpsertPermissionGrant {
+        grant: PermissionGrantUpsert,
+    },
+    RevokePermissionGrant {
+        permission_id: PermissionId,
+    },
+    ListResourceLabels {
+        limit: u16,
+    },
+    UpsertResourceLabel {
+        label: ResourceLabelUpsert,
+    },
+    RemoveResourceLabel {
+        resource_label_id: ResourceLabelId,
+    },
+    ListAgents {
+        limit: u16,
+    },
+    UpsertAgent {
+        agent: AgentConfigurationUpsert,
+    },
+    RemoveAgent {
+        agent_id: AgentId,
+    },
+    RunAgent {
+        request: AgentRunRequest,
+    },
+    ListAgentSessions {
+        limit: u16,
+    },
+    ListRegisteredApplications {
+        limit: u16,
+    },
+    UpsertRegisteredApplication {
+        application: ApplicationRegistrationUpsert,
+    },
+    RemoveRegisteredApplication {
+        entity_id: EntityId,
     },
 }

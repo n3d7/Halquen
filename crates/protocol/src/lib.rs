@@ -12,9 +12,12 @@ pub mod transport;
 
 pub use client::{ClientError, DaemonClient};
 pub use interaction::{
-    ChatRequest, ChatResult, ConfirmationPrompt, ConfirmationResult, DiagnosticsSnapshot,
-    MemoryMutationReceipt, MemoryQuery, MemoryStateUpdate, ModelUpsert, PromptPreview,
-    ProviderTestStatus, ProviderUpsert,
+    AgentConfigurationUpsert, AgentProposalDisposition, AgentProposalResult, AgentRunRequest,
+    AgentRunResult, ApplicationRegistrationResult, ApplicationRegistrationUpsert,
+    CapabilityDiscovery, ChatRequest, ChatResult, ConfirmationPersistence, ConfirmationPrompt,
+    ConfirmationResult, DiagnosticsSnapshot, MemoryMutationReceipt, MemoryQuery, MemoryStateUpdate,
+    ModelUpsert, PermissionGrantUpsert, PromptPreview, ProviderTestStatus, ProviderUpsert,
+    ResourceLabelUpsert, SecurityOverview,
 };
 pub use request::{ProtocolRequest, RequestEnvelope};
 pub use response::{
@@ -22,7 +25,7 @@ pub use response::{
 };
 pub use transport::{RuntimePathError, RuntimePaths};
 
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 5;
 pub const MAX_FRAME_SIZE: usize = 64 * 1024;
 
 #[derive(Debug, Error)]
@@ -217,5 +220,38 @@ mod tests {
         };
         let decoded = decode_request(&encode_request(&request).unwrap()).unwrap();
         assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn permission_request_cannot_claim_grant_authority() {
+        let request = RequestEnvelope {
+            version: PROTOCOL_VERSION,
+            request_id: "request:permission".to_owned(),
+            request: ProtocolRequest::UpsertPermissionGrant {
+                grant: PermissionGrantUpsert {
+                    id: None,
+                    effect: halquen_domain::PermissionEffect::Allow,
+                    lifetime: halquen_domain::PermissionLifetime::Always,
+                    capability_id: halquen_domain::CapabilityId::new("system.open_app").unwrap(),
+                    arguments: halquen_domain::ActionArguments::OpenApp {
+                        app: halquen_domain::EntityId::new("app:telegram").unwrap(),
+                    },
+                    resources: vec![halquen_domain::ResourceDescriptor {
+                        kind: halquen_domain::ResourceKind::Application,
+                        identifier: "app:telegram".to_owned(),
+                        classification: halquen_domain::ResourceClassification::Local,
+                    }],
+                    destination: None,
+                    session: None,
+                    agent_id: None,
+                    expires_at_ms: None,
+                },
+            },
+        };
+        let encoded = encode_request(&request).unwrap();
+        let json = std::str::from_utf8(&encoded).unwrap();
+        assert!(!json.contains("granted_by"));
+        assert!(!json.contains("authority"));
+        assert_eq!(decode_request(&encoded).unwrap(), request);
     }
 }

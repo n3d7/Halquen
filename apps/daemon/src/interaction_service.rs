@@ -8,25 +8,32 @@ use halquen_ai::{
 use halquen_audit::{AuditEvent, AuditRecord, ExecutionReceipt, ExecutionStatus, SafeResultCode};
 use halquen_capabilities::{ExecutionResultCode, Executor};
 use halquen_domain::{
-    ActionArguments, ActionRequest, ActivityEvent, ActivityId, ActivityKind, AiTaskType, AuditId,
+    ActionArguments, ActionContext, ActionOrigin, ActionProposal, ActionRequest, ActivityEvent,
+    ActivityId, ActivityKind, AiTaskType, AuditId, BehaviourEventId, BehaviourOutcome,
     CacheEntryId, CachedResponse, CapabilityId, ChatMessage, ChatMessageId, ChatOrigin, ChatRole,
-    ChatRoute, ContextCategory, DiagnosticEntry, DiagnosticSeverity, EvidenceId, ExecutionId,
-    MemoryId, MemoryRevisionId, ModelSelection, PrivacyClass, Provider, ProviderId, ProviderStatus,
-    ResponseFeedback, TrustClass, UsageStats,
+    ChatRoute, ContextCategory, Correction, CorrectionId, DiagnosticEntry, DiagnosticSeverity,
+    EvidenceId, ExecutionId, IntentUsageEvent, MemoryId, MemoryRevisionId, ModelSelection,
+    PermissionEffect, PermissionGrant, PermissionId, PermissionLifetime, PermissionScope,
+    PermissionSessionScope, PrivacyClass, ProposalId, Provider, ProviderId, ProviderStatus,
+    ResourceClassification, ResourceDescriptor, ResourceKind, ResponseFeedback, TrustClass,
+    UsageStats,
 };
-use halquen_memory::{Evidence, MemoryItem, MemoryKind, MemoryRevision, MemoryValue};
-use halquen_policy::{PolicyContext, PolicyOutcome};
+use halquen_memory::{
+    BehaviourScorer, DEFAULT_RETENTION_MS, Evidence, IntentResolution, MemoryItem, MemoryKind,
+    MemoryRevision, MemoryValue,
+};
+use halquen_policy::PolicyOutcome;
 use halquen_protocol::{
-    ChatRequest, ChatResult, ConfirmationPrompt, ConfirmationResult, DiagnosticsSnapshot,
-    MemoryMutationReceipt, MemoryQuery, MemoryStateUpdate, ModelUpsert, PROTOCOL_VERSION,
-    PromptPreview, ProtocolErrorBody, ProtocolErrorCode, ProtocolResponse, ProviderTestStatus,
-    ProviderUpsert,
+    ChatRequest, ChatResult, ConfirmationPersistence, ConfirmationPrompt, ConfirmationResult,
+    DiagnosticsSnapshot, MemoryMutationReceipt, MemoryQuery, MemoryStateUpdate, ModelUpsert,
+    PROTOCOL_VERSION, PromptPreview, ProtocolErrorBody, ProtocolErrorCode, ProtocolResponse,
+    ProviderTestStatus, ProviderUpsert,
 };
 use tokio::sync::watch;
 use tokio::time::timeout;
 use zeroize::Zeroizing;
 
-use crate::chat::{LocalIntent, normalize_request, resolve_local};
+use crate::chat::{LocalIntent, application_entity, normalize_request, resolve_local};
 use crate::service::{HalquenService, PendingConfirmation, internal_error, now_ms};
 
 const CONFIRMATION_TTL_MS: i64 = 5 * 60 * 1_000;
@@ -169,39 +176,211 @@ impl<E: Executor> HalquenService<E> {
         correlation_id: &str,
         started: Instant,
     ) -> Result<ProtocolResponse, ProtocolErrorBody> {
+        let intent = match intent {
+            LocalIntent::ContextualOpenApp => {
+                let timestamp = now_ms();
+                let events = self
+                    .database
+                    .recent_intent_usage(
+                        "open_application",
+                        "application",
+                        timestamp.saturating_sub(DEFAULT_RETENTION_MS),
+                        512,
+                    )
+                    .map_err(internal_error)?;
+                match BehaviourScorer::default().resolve(&events, timestamp) {
+                    IntentResolution::Resolved(candidate) => LocalIntent::OpenApp {
+                        display_name: display_for_entity(&candidate.entity_id),
+                        entity_id: candidate.entity_id,
+                    },
+                    IntentResolution::Ambiguous(candidates) => {
+                        let detail = candidates
+                            .iter()
+                            .map(|candidate| {
+                                format!(
+                                    "{} {:.2}",
+                                    display_for_entity(&candidate.entity_id),
+                                    f32::from(candidate.score_permille) / 1_000.0
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" · ");
+                        self.database
+                            .add_usage(UsageStats {
+                                clarifications: 1,
+                                ..UsageStats::default()
+                            })
+                            .map_err(internal_error)?;
+                        self.activity(
+                            Some(session.id.clone()),
+                            correlation_id,
+                            ActivityKind::LocalRouteHit,
+                            "Clarification requested for contextual application intent",
+                            Some(detail.clone()),
+                        )?;
+                        let assistant = assistant_message(
+                            &session.id,
+                            if detail.is_empty() {
+                                "Which application should I open?".to_owned()
+                            } else {
+                                format!(
+                                    "Which application did you mean? Recent candidates: {detail}"
+                                )
+                            },
+                            ChatOrigin::Local,
+                            ChatRoute::Clarification,
+                            started,
+                            None,
+                            None,
+                            None,
+                            None,
+                        );
+                        return self.finish_chat(session, user_message, assistant, None);
+                    }
+                    IntentResolution::Unknown => {
+                        self.database
+                            .add_usage(UsageStats {
+                                clarifications: 1,
+                                ..UsageStats::default()
+                            })
+                            .map_err(internal_error)?;
+                        let assistant = assistant_message(
+                            &session.id,
+                            "Which application should I open? I do not have enough recent evidence to choose safely."
+                                .to_owned(),
+                            ChatOrigin::Local,
+                            ChatRoute::Clarification,
+                            started,
+                            None,
+                            None,
+                            None,
+                            None,
+                        );
+                        return self.finish_chat(session, user_message, assistant, None);
+                    }
+                }
+            }
+            LocalIntent::CorrectOpenApp { rejected, accepted } => {
+                let timestamp = now_ms();
+                let rejected_entity = application_entity(&rejected)
+                    .ok_or_else(|| validation("corrected application name is invalid"))?;
+                let accepted_entity = application_entity(&accepted)
+                    .ok_or_else(|| validation("corrected application name is invalid"))?;
+                for (entity_id, outcome) in [
+                    (rejected_entity, BehaviourOutcome::CorrectionRejected),
+                    (
+                        accepted_entity.clone(),
+                        BehaviourOutcome::CorrectionAccepted,
+                    ),
+                ] {
+                    self.database
+                        .record_intent_usage(&IntentUsageEvent {
+                            id: BehaviourEventId::generate(),
+                            intent: "open_application".to_owned(),
+                            entity_id,
+                            outcome,
+                            context_class: "application".to_owned(),
+                            created_at_ms: timestamp,
+                        })
+                        .map_err(internal_error)?;
+                }
+                self.database
+                    .record_correction(&Correction {
+                        id: CorrectionId::generate(),
+                        target_id: "intent:open_application".to_owned(),
+                        correction_summary: format!("{rejected} -> {accepted}"),
+                        created_at_ms: timestamp,
+                    })
+                    .map_err(internal_error)?;
+                LocalIntent::OpenApp {
+                    display_name: accepted,
+                    entity_id: accepted_entity,
+                }
+            }
+            other => other,
+        };
+
         match intent {
             LocalIntent::OpenApp {
-                display_name,
-                entity_id,
+                mut display_name,
+                mut entity_id,
             } => {
+                if let Some((_item, revision)) = self
+                    .database
+                    .preference_by_key(&display_name)
+                    .map_err(internal_error)?
+                    && let MemoryValue::Preference { value, .. } = revision.value
+                    && let Some(alias_entity) = application_entity(&value)
+                {
+                    display_name = value;
+                    entity_id = alias_entity;
+                }
+                let resource_id = entity_id.as_str().to_owned();
+                let resource_classification = self
+                    .database
+                    .resource_label_for(ResourceKind::Application, &resource_id)
+                    .map_err(internal_error)?
+                    .map_or(ResourceClassification::Local, |label| label.classification);
                 let action = ActionRequest::new(
                     CapabilityId::new("system.open_app")
                         .map_err(|_| internal_error("built-in capability identifier is invalid"))?,
                     ActionArguments::OpenApp { app: entity_id },
                 );
-                let response = self.dry_run_action(action.clone()).await?;
+                let proposal = ActionProposal::new(
+                    action,
+                    ActionContext::local_resolution(Some(correlation_id.to_owned())).with_resource(
+                        ResourceDescriptor {
+                            kind: ResourceKind::Application,
+                            identifier: resource_id,
+                            classification: resource_classification,
+                        },
+                    ),
+                )
+                .map_err(|_| validation("local action context is invalid"))?;
+                let response = self
+                    .execute_proposal(proposal.clone(), Some(&session.id))
+                    .await?;
                 let (content, confirmation) = match response {
-                    ProtocolResponse::DryRun { decision, receipt }
+                    ProtocolResponse::Execution { decision, receipt }
                         if decision.outcome == PolicyOutcome::Allow =>
                     {
+                        self.database
+                            .record_intent_usage(&IntentUsageEvent {
+                                id: BehaviourEventId::generate(),
+                                intent: "open_application".to_owned(),
+                                entity_id: match &proposal.action.arguments {
+                                    ActionArguments::OpenApp { app } => app.clone(),
+                                    ActionArguments::None => {
+                                        return Err(internal_error(
+                                            "open-app proposal lost arguments",
+                                        ));
+                                    }
+                                },
+                                outcome: BehaviourOutcome::Success,
+                                context_class: "application".to_owned(),
+                                created_at_ms: now_ms(),
+                            })
+                            .map_err(internal_error)?;
                         self.activity(
                             Some(session.id.clone()),
                             correlation_id,
                             ActivityKind::ExecutionCompleted,
-                            "Local capability dry-run completed",
+                            "Local capability execution completed",
                             Some(format!(
                                 "{} v{} · {:?}",
                                 receipt.capability_id, receipt.capability_version, receipt.status
                             )),
                         )?;
-                        (
+                        let content = if receipt.status == ExecutionStatus::DryRunSucceeded {
                             format!(
                                 "Dry-run completed for {display_name}. No application was launched."
-                            ),
-                            None,
-                        )
+                            )
+                        } else {
+                            format!("Launch request completed for {display_name}.")
+                        };
+                        (content, None)
                     }
-                    ProtocolResponse::DryRun { decision, .. }
+                    ProtocolResponse::Execution { decision, receipt }
                         if decision.outcome == PolicyOutcome::Confirm =>
                     {
                         let confirmation_id =
@@ -210,9 +389,11 @@ impl<E: Executor> HalquenService<E> {
                         self.pending_confirmations.insert(
                             confirmation_id.clone(),
                             PendingConfirmation {
-                                action,
+                                request_execution_id: receipt.execution_id,
+                                proposal: proposal.clone(),
                                 title: format!("Open {display_name}"),
                                 expires_at_ms,
+                                session_id: Some(session.id.clone()),
                             },
                         );
                         self.activity(
@@ -229,10 +410,22 @@ impl<E: Executor> HalquenService<E> {
                                 title: format!("Open {display_name}"),
                                 reason: "Policy requires explicit confirmation".to_owned(),
                                 expires_at_ms,
+                                operation: "system.open_app".to_owned(),
+                                target: display_name.clone(),
+                                destination: None,
+                                origin: proposal.context.origin,
+                                resource_classifications: proposal
+                                    .context
+                                    .resources
+                                    .iter()
+                                    .map(|resource| resource.classification)
+                                    .collect(),
+                                agent_id: None,
+                                agent_session_id: None,
                             }),
                         )
                     }
-                    ProtocolResponse::DryRun { .. } => {
+                    ProtocolResponse::Execution { .. } => {
                         ("Halquen denied this action.".to_owned(), None)
                     }
                     _ => return Err(internal_error("unexpected action response")),
@@ -331,6 +524,9 @@ impl<E: Executor> HalquenService<E> {
                     None,
                 );
                 self.finish_chat(session, user_message, assistant, None)
+            }
+            LocalIntent::ContextualOpenApp | LocalIntent::CorrectOpenApp { .. } => {
+                Err(internal_error("contextual intent was not normalized"))
             }
         }
     }
@@ -1158,6 +1354,8 @@ impl<E: Executor> HalquenService<E> {
         &mut self,
         confirmation_id: &str,
         allow: bool,
+        persistence: ConfirmationPersistence,
+        expires_at_ms: Option<i64>,
     ) -> Result<ProtocolResponse, ProtocolErrorBody> {
         let pending = self
             .pending_confirmations
@@ -1167,6 +1365,18 @@ impl<E: Executor> HalquenService<E> {
             return Err(confirmation_expired());
         }
         if !allow {
+            self.database
+                .append_audit(&AuditRecord {
+                    id: AuditId::generate(),
+                    created_at_ms: now_ms(),
+                    event: AuditEvent::ConfirmationReceived {
+                        execution_id: pending.request_execution_id,
+                        capability_id: pending.proposal.action.capability_id,
+                        accepted: false,
+                        agent: pending.proposal.context.agent,
+                    },
+                })
+                .map_err(internal_error)?;
             return Ok(ProtocolResponse::Confirmation {
                 result: ConfirmationResult {
                     execution_id: None,
@@ -1175,14 +1385,16 @@ impl<E: Executor> HalquenService<E> {
                 },
             });
         }
-        let descriptor = self.descriptor_for(&pending.action)?.clone();
+        let descriptor = self.descriptor_for(&pending.proposal.action)?.clone();
         let execution_id = ExecutionId::generate();
+        let proposal_id = ProposalId::generate();
         let started_at_ms = now_ms();
-        let evaluation = self.policy.authorize_confirmed_once(
+        let context = self.policy_context(&pending.proposal, pending.session_id.as_ref())?;
+        let evaluation = self.policy.authorize_confirmed_proposal_once(
             &descriptor,
-            pending.action,
+            pending.proposal.clone(),
             execution_id.clone(),
-            &PolicyContext::default(),
+            &context,
         );
         let decision = evaluation.decision.clone();
         let authorization = evaluation
@@ -1191,7 +1403,67 @@ impl<E: Executor> HalquenService<E> {
                 code: ProtocolErrorCode::PrivacyDenied,
                 message: "policy denied the confirmed action".to_owned(),
             })?;
+        if persistence != ConfirmationPersistence::Once {
+            let (lifetime, session, expiry) = match persistence {
+                ConfirmationPersistence::Once => {
+                    return Err(validation("once confirmation does not create a grant"));
+                }
+                ConfirmationPersistence::Session => {
+                    let session = if let Some(identity) = &pending.proposal.context.agent {
+                        PermissionSessionScope::Agent(identity.session_id.clone())
+                    } else {
+                        PermissionSessionScope::Chat(
+                            pending
+                                .session_id
+                                .clone()
+                                .ok_or_else(|| validation("session confirmation has no session"))?,
+                        )
+                    };
+                    (PermissionLifetime::Session, Some(session), None)
+                }
+                ConfirmationPersistence::Until => {
+                    let expiry = expires_at_ms
+                        .filter(|expiry| *expiry > started_at_ms)
+                        .ok_or_else(|| {
+                            validation("confirmation expiration must be in the future")
+                        })?;
+                    (PermissionLifetime::Until, None, Some(expiry))
+                }
+                ConfirmationPersistence::Always => (PermissionLifetime::Always, None, None),
+            };
+            self.database
+                .upsert_permission_grant(&PermissionGrant {
+                    id: PermissionId::generate(),
+                    effect: PermissionEffect::Allow,
+                    lifetime,
+                    scope: PermissionScope::from_proposal(&pending.proposal),
+                    session,
+                    agent_id: pending
+                        .proposal
+                        .context
+                        .agent
+                        .as_ref()
+                        .map(|identity| identity.agent_id.clone()),
+                    granted_by: ActionOrigin::UserExplicit,
+                    granted_at_ms: started_at_ms,
+                    expires_at_ms: expiry,
+                    revoked_at_ms: None,
+                    use_limit: None,
+                    use_count: 0,
+                })
+                .map_err(internal_error)?;
+        }
         let mut audit_records = vec![
+            AuditRecord {
+                id: AuditId::generate(),
+                created_at_ms: started_at_ms,
+                event: AuditEvent::ProposalCreated {
+                    execution_id: execution_id.clone(),
+                    proposal_id,
+                    capability_id: descriptor.id.clone(),
+                    context: pending.proposal.context.sanitized_summary(),
+                },
+            },
             AuditRecord {
                 id: AuditId::generate(),
                 created_at_ms: started_at_ms,
@@ -1213,6 +1485,25 @@ impl<E: Executor> HalquenService<E> {
             AuditRecord {
                 id: AuditId::generate(),
                 created_at_ms: started_at_ms,
+                event: AuditEvent::ConfirmationReceived {
+                    execution_id: execution_id.clone(),
+                    capability_id: descriptor.id.clone(),
+                    accepted: true,
+                    agent: pending.proposal.context.agent.clone(),
+                },
+            },
+            AuditRecord {
+                id: AuditId::generate(),
+                created_at_ms: started_at_ms,
+                event: AuditEvent::AuthorizationCreated {
+                    execution_id: execution_id.clone(),
+                    capability_id: descriptor.id.clone(),
+                    agent: pending.proposal.context.agent.clone(),
+                },
+            },
+            AuditRecord {
+                id: AuditId::generate(),
+                created_at_ms: started_at_ms,
                 event: AuditEvent::ExecutionStarted {
                     execution_id: execution_id.clone(),
                     capability_id: descriptor.id.clone(),
@@ -1226,8 +1517,13 @@ impl<E: Executor> HalquenService<E> {
         .await
         {
             Ok(Ok(outcome)) => {
-                let result = match outcome.code {
-                    ExecutionResultCode::Simulated => SafeResultCode::Simulated,
+                let (status, result) = match outcome.code {
+                    ExecutionResultCode::Simulated => {
+                        (ExecutionStatus::DryRunSucceeded, SafeResultCode::Simulated)
+                    }
+                    ExecutionResultCode::Launched => {
+                        (ExecutionStatus::Succeeded, SafeResultCode::Launched)
+                    }
                 };
                 audit_records.push(AuditRecord {
                     id: AuditId::generate(),
@@ -1238,10 +1534,10 @@ impl<E: Executor> HalquenService<E> {
                         result_code: Some(result),
                     },
                 });
-                (ExecutionStatus::DryRunSucceeded, Some(result), None, None)
+                (status, Some(result), None, None)
             }
-            Ok(Err(_)) => {
-                let code = "executor_contract_rejected".to_owned();
+            Ok(Err(error)) => {
+                let code = crate::service::execution_error_code(&error).to_owned();
                 audit_records.push(AuditRecord {
                     id: AuditId::generate(),
                     created_at_ms: now_ms(),
@@ -1277,6 +1573,22 @@ impl<E: Executor> HalquenService<E> {
                 )
             }
         };
+        if matches!(
+            status,
+            ExecutionStatus::DryRunSucceeded | ExecutionStatus::Succeeded
+        ) && let ActionArguments::OpenApp { app } = &pending.proposal.action.arguments
+        {
+            self.database
+                .record_intent_usage(&IntentUsageEvent {
+                    id: BehaviourEventId::generate(),
+                    intent: "open_application".to_owned(),
+                    entity_id: app.clone(),
+                    outcome: BehaviourOutcome::Success,
+                    context_class: "application".to_owned(),
+                    created_at_ms: now_ms(),
+                })
+                .map_err(internal_error)?;
+        }
         let receipt = ExecutionReceipt {
             execution_id: execution_id.clone(),
             capability_id: descriptor.id,
@@ -1298,10 +1610,14 @@ impl<E: Executor> HalquenService<E> {
             result: ConfirmationResult {
                 execution_id: Some(execution_id),
                 accepted: true,
-                message: format!(
-                    "{}: confirmed dry-run completed; no real side effect was performed",
-                    pending.title
-                ),
+                message: if status == ExecutionStatus::DryRunSucceeded {
+                    format!(
+                        "{}: confirmed dry-run completed; no real side effect was performed",
+                        pending.title
+                    )
+                } else {
+                    format!("{}: confirmed execution completed", pending.title)
+                },
             },
         })
     }
@@ -1377,6 +1693,14 @@ fn assistant_message(
         reusable_candidate_id,
         created_at_ms: now_ms(),
     }
+}
+
+fn display_for_entity(entity: &halquen_domain::EntityId) -> String {
+    entity
+        .as_str()
+        .strip_prefix("app:")
+        .unwrap_or(entity.as_str())
+        .replace('_', " ")
 }
 
 fn validation(message: &str) -> ProtocolErrorBody {
@@ -1467,12 +1791,17 @@ fn provider_status_for_error(error: &AiError) -> ProviderStatus {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::path::Path;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    use halquen_ai::{AiResponse, AiUsage, ProviderFuture, ProviderTestResult};
-    use halquen_capabilities::DryRunExecutor;
-    use halquen_domain::{AiModel, ModelId, ProviderKind};
+    use halquen_ai::{AgentHost, AiResponse, AiUsage, ProviderFuture, ProviderTestResult};
+    use halquen_capabilities::{DryRunExecutor, inspect_executable};
+    use halquen_domain::{
+        AgentConfiguration, AgentResourceLimits, AgentTransport, AiModel, ExecutableOwnership,
+        ModelId, ProviderKind, SandboxBackend,
+    };
+    use halquen_protocol::{AgentProposalDisposition, AgentRunRequest};
 
     use super::*;
 
@@ -1626,6 +1955,240 @@ mod tests {
                 .contains("No application was launched")
         );
         assert_eq!(fake.calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn recent_context_resolves_safe_ambiguous_open_locally() {
+        let mut service = service();
+        for index in 0..3 {
+            service
+                .chat(chat("Open Discord"), &format!("request:discord:{index}"))
+                .await
+                .unwrap();
+        }
+        let response = service
+            .chat(chat("запусти тот мессенджер"), "request:contextual")
+            .await
+            .unwrap();
+        match response {
+            ProtocolResponse::Chat { result } => {
+                assert_eq!(
+                    result.assistant_message.route,
+                    Some(ChatRoute::LocalCapability)
+                );
+                assert!(result.assistant_message.content.contains("discord"));
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn close_recent_scores_request_clarification() {
+        let mut service = service();
+        service
+            .chat(chat("Open Telegram"), "request:telegram")
+            .await
+            .unwrap();
+        service
+            .chat(chat("Open Discord"), "request:discord")
+            .await
+            .unwrap();
+        let response = service
+            .chat(chat("open that messenger"), "request:ambiguous")
+            .await
+            .unwrap();
+        match response {
+            ProtocolResponse::Chat { result } => {
+                assert_eq!(
+                    result.assistant_message.route,
+                    Some(ChatRoute::Clarification)
+                );
+                assert!(result.confirmation.is_none());
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_correction_changes_future_ranking_without_granting_permission() {
+        let mut service = service();
+        service
+            .chat(chat("Open Telegram"), "request:telegram")
+            .await
+            .unwrap();
+        service
+            .chat(chat("не Telegram, Discord"), "request:correction")
+            .await
+            .unwrap();
+        assert!(
+            service
+                .database
+                .list_permission_grants(10)
+                .unwrap()
+                .is_empty()
+        );
+        let response = service
+            .chat(chat("open that messenger"), "request:after-correction")
+            .await
+            .unwrap();
+        match response {
+            ProtocolResponse::Chat { result } => {
+                assert!(result.assistant_message.content.contains("discord"));
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn confirmed_exact_permission_persists_and_revocation_restores_confirmation() {
+        let mut service = service();
+        service
+            .database
+            .update_security_profile(halquen_domain::SecurityProfile::Strict, now_ms())
+            .unwrap();
+        let first = service
+            .chat(chat("Open Telegram"), "request:strict:first")
+            .await
+            .unwrap();
+        let confirmation_id = match first {
+            ProtocolResponse::Chat { result } => result.confirmation.unwrap().confirmation_id,
+            other => panic!("unexpected response: {other:?}"),
+        };
+        service
+            .confirm_action(
+                &confirmation_id,
+                true,
+                ConfirmationPersistence::Always,
+                None,
+            )
+            .await
+            .unwrap();
+        let grants = service.database.list_permission_grants(10).unwrap();
+        assert_eq!(grants.len(), 1);
+
+        let second = service
+            .chat(chat("Open Telegram"), "request:strict:second")
+            .await
+            .unwrap();
+        match second {
+            ProtocolResponse::Chat { result } => assert!(result.confirmation.is_none()),
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        service
+            .database
+            .revoke_permission(&grants[0].id, now_ms())
+            .unwrap();
+        let third = service
+            .chat(chat("Open Telegram"), "request:strict:third")
+            .await
+            .unwrap();
+        match third {
+            ProtocolResponse::Chat { result } => assert!(result.confirmation.is_some()),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn confirmation_token_is_single_use_and_replay_has_no_side_effects() {
+        let mut service = service();
+        service
+            .database
+            .update_security_profile(halquen_domain::SecurityProfile::Strict, now_ms())
+            .unwrap();
+        let response = service
+            .chat(chat("Open Telegram"), "request:strict:single-use")
+            .await
+            .unwrap();
+        let confirmation_id = match response {
+            ProtocolResponse::Chat { result } => result.confirmation.unwrap().confirmation_id,
+            other => panic!("unexpected response: {other:?}"),
+        };
+
+        service
+            .confirm_action(&confirmation_id, true, ConfirmationPersistence::Once, None)
+            .await
+            .unwrap();
+        let after_first = service.database.audit_stats().unwrap();
+
+        let replay = service
+            .confirm_action(&confirmation_id, true, ConfirmationPersistence::Once, None)
+            .await
+            .unwrap_err();
+        assert_eq!(replay.code, ProtocolErrorCode::ConfirmationExpired);
+        assert_eq!(service.database.audit_stats().unwrap(), after_first);
+    }
+
+    #[tokio::test]
+    async fn brokered_agent_unknown_capability_is_rejected_without_execution() {
+        let executable = match Path::new("/usr/bin/python3").canonicalize() {
+            Ok(executable) => executable,
+            Err(_) => return,
+        };
+        let Some(executable) = executable.to_str().map(str::to_owned) else {
+            return;
+        };
+        let Ok(identity) = inspect_executable(&executable, ExecutableOwnership::RootOnly, None)
+        else {
+            return;
+        };
+        let source = r#"import sys,json
+json.loads(sys.stdin.readline())
+print(json.dumps({"version":1,"kind":"proposals","message":"unknown","proposals":[{"action":{"capability_id":"system.not_registered","arguments":{"kind":"open_app","app":"app:test"}},"explanation":"test"}]}), flush=True)
+result=json.loads(sys.stdin.readline())
+assert result["results"][0]["disposition"] == "failed"
+"#;
+        let agent = AgentConfiguration {
+            id: halquen_domain::AgentId::generate(),
+            name: "unknown capability fixture".to_owned(),
+            transport: AgentTransport::Cli,
+            executable,
+            arguments: vec!["-c".to_owned(), source.to_owned()],
+            socket_path: None,
+            sandbox: SandboxBackend::UnsafeUnsandboxed,
+            ownership: ExecutableOwnership::RootOnly,
+            executable_identity: Some(identity),
+            resource_limits: AgentResourceLimits::default(),
+            enabled: true,
+            timeout_ms: 2_000,
+            max_stdout_bytes: 4_096,
+            max_stderr_bytes: 1_024,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        let mut service = service();
+        service.agent_host = AgentHost::with_unsafe_unsandboxed_opt_in();
+        service.database.upsert_agent(&agent).unwrap();
+
+        let response = service
+            .run_agent(AgentRunRequest {
+                agent_id: agent.id,
+                input: "test".to_owned(),
+            })
+            .await
+            .unwrap();
+        let session_id = match response {
+            ProtocolResponse::AgentRun { result } => {
+                assert_eq!(result.proposals.len(), 1);
+                assert_eq!(
+                    result.proposals[0].disposition,
+                    AgentProposalDisposition::Failed
+                );
+                result.session.id
+            }
+            other => panic!("unexpected response: {other:?}"),
+        };
+        assert_eq!(service.database.audit_stats().unwrap().executions, 0);
+        assert_eq!(
+            service
+                .database
+                .audit_event_kinds(session_id.as_str())
+                .unwrap(),
+            vec![
+                "agent_session_started".to_owned(),
+                "agent_session_finished".to_owned(),
+            ]
+        );
     }
 
     #[tokio::test]

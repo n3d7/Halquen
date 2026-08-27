@@ -1,4 +1,7 @@
-use halquen_domain::{CapabilityId, ExecutionId, MemoryId, MemoryRevisionId};
+use halquen_domain::{
+    ActionContextSummary, AgentExecutionIdentity, AgentSessionId, AgentSessionStatus, CapabilityId,
+    ExecutionId, MemoryId, MemoryRevisionId, ProposalId,
+};
 use halquen_policy::PolicyDecision;
 use serde::{Deserialize, Serialize};
 
@@ -6,6 +9,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionStatus {
     DryRunSucceeded,
+    Succeeded,
     Failed,
     TimedOut,
     NotExecuted,
@@ -15,6 +19,7 @@ pub enum ExecutionStatus {
 #[serde(rename_all = "snake_case")]
 pub enum SafeResultCode {
     Simulated,
+    Launched,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +48,12 @@ pub struct AuditRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AuditEvent {
+    ProposalCreated {
+        execution_id: ExecutionId,
+        proposal_id: ProposalId,
+        capability_id: CapabilityId,
+        context: ActionContextSummary,
+    },
     ActionRequested {
         execution_id: ExecutionId,
         capability_id: CapabilityId,
@@ -56,6 +67,17 @@ pub enum AuditEvent {
     ConfirmationRequired {
         execution_id: ExecutionId,
         capability_id: CapabilityId,
+    },
+    ConfirmationReceived {
+        execution_id: ExecutionId,
+        capability_id: CapabilityId,
+        accepted: bool,
+        agent: Option<AgentExecutionIdentity>,
+    },
+    AuthorizationCreated {
+        execution_id: ExecutionId,
+        capability_id: CapabilityId,
+        agent: Option<AgentExecutionIdentity>,
     },
     ActionDenied {
         execution_id: ExecutionId,
@@ -79,6 +101,14 @@ pub enum AuditEvent {
         execution_id: ExecutionId,
         capability_id: CapabilityId,
         error_code: String,
+    },
+    AgentSessionStarted {
+        session_id: AgentSessionId,
+        agent: AgentExecutionIdentity,
+    },
+    AgentSessionFinished {
+        session_id: AgentSessionId,
+        status: AgentSessionStatus,
     },
     MemoryRevision {
         memory_id: MemoryId,

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod agent;
 mod context;
 mod prompt;
 mod provider;
@@ -7,6 +8,10 @@ mod router;
 mod secret;
 mod types;
 
+pub use agent::{
+    AgentBrokerDisposition, AgentBrokerProposalResult, AgentCapabilityView, AgentCompletion,
+    AgentHost, AgentHostError, AgentInvocationResult, RunningAgent,
+};
 pub use context::{ContextBuilder, ContextItem, ContextProjection};
 pub use prompt::{CORE_SECURITY_CONTRACT, PromptComposer, PromptProfile};
 pub use provider::{

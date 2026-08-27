@@ -82,7 +82,13 @@
 
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-body { background: var(--bg); color: var(--text); font-size: 14px; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  -webkit-user-select: none;
+  user-select: none;
+}
 button, input, select, textarea { font: inherit; }
 button { color: inherit; }
 h1, h2, h3, p { margin-top: 0; }
@@ -91,6 +97,30 @@ h2 { margin-bottom: 4px; font-size: 17px; }
 h3 { margin-bottom: 4px; font-size: 15px; }
 p { color: var(--muted); line-height: 1.55; }
 code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+
+input,
+textarea,
+[contenteditable="true"],
+code,
+pre,
+.message-content,
+.message-details dd,
+.confirmation p,
+.confirmation-detail dd,
+.timeline-card p,
+.timeline-card details dd,
+.detail-list dd,
+.history-entry p,
+.preview-result,
+.code-preview,
+.diagnostic-list article p,
+.diagnostic-list article small,
+.error-notice span,
+.offline-banner span,
+.danger-note {
+  -webkit-user-select: text;
+  user-select: text;
+}
 
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
   outline: 2px solid var(--accent);
@@ -218,6 +248,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .confirmation p { margin: 4px 0; color: var(--text); }
 .confirmation small { color: var(--muted); }
 .confirmation-actions { display: flex; gap: 7px; }
+.confirmation-detail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px 14px; margin: 10px 0; }
+.confirmation-detail dt { color: var(--muted); font-size: 10px; }
+.confirmation-detail dd { margin: 1px 0 0; font-size: 11px; text-transform: capitalize; }
+.confirmation .select { max-width: 260px; min-height: 31px; }
 .inline-success { max-width: 780px; margin: 0 auto 15px; padding: 9px 11px; border-radius: 7px; background: var(--good-soft); color: var(--good); }
 .composer-wrap { padding: 10px max(22px, calc((100% - 780px) / 2)) 12px; border-top: 1px solid var(--border); }
 .composer { display: flex; align-items: flex-end; gap: 6px; padding: 7px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--surface); }
@@ -225,6 +259,24 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .composer textarea { flex: 1; max-height: 140px; min-height: 34px; padding: 7px; overflow: auto; border: 0; outline: 0; resize: none; background: transparent; color: var(--text); line-height: 1.4; }
 .composer-wrap > span { display: block; margin-top: 5px; color: var(--faint); font-size: 10px; text-align: center; }
 .code-preview { margin-top: 12px; padding: 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-muted); white-space: pre-wrap; }
+
+/* Security */
+.security-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.security-wide { grid-column: 1 / -1; }
+.security-split { display: grid; grid-template-columns: minmax(280px, 0.8fr) minmax(420px, 1.4fr); gap: 16px; align-items: start; }
+.security-counts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 15px 0 0; }
+.security-counts div { padding: 10px; border-radius: 7px; background: var(--surface-muted); }
+.security-counts dt { color: var(--muted); font-size: 11px; }
+.security-counts dd { margin: 4px 0 0; font-size: 22px; font-weight: 700; }
+.rule-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.rule-list code { padding: 6px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-muted); }
+.security-list { border-top: 1px solid var(--border); }
+.security-row { display: grid; grid-template-columns: minmax(0, 1fr) auto 82px 34px; align-items: center; gap: 10px; padding: 10px 3px; border-bottom: 1px solid var(--border); }
+.security-row.revoked { opacity: 0.5; }
+.security-row > div:first-child { display: flex; flex-direction: column; min-width: 0; gap: 3px; }
+.security-row strong, .security-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.security-row span { color: var(--muted); font-size: 11px; text-transform: capitalize; }
+.danger-note { display: flex; align-items: flex-start; gap: 9px; padding: 10px; border: 1px solid var(--danger); border-radius: 7px; background: var(--danger-soft); color: var(--danger); line-height: 1.45; }
 
 /* Lists and activity */
 .filter-bar { display: flex; align-items: center; gap: 9px; margin-bottom: 18px; }

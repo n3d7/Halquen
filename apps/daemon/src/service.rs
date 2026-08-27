@@ -1,16 +1,21 @@
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use halquen_ai::{
-    DisabledProviderClient, KeyringSecretStore, OpenAiCompatibleClient, ProviderClient, SecretStore,
+    AgentHost, DisabledProviderClient, KeyringSecretStore, OpenAiCompatibleClient, ProviderClient,
+    SecretStore,
 };
 use halquen_audit::{AuditEvent, AuditRecord, ExecutionReceipt, ExecutionStatus, SafeResultCode};
 use halquen_capabilities::{
-    CapabilityRegistry, ExecutionResultCode, Executor, open_app_descriptor,
+    ApplicationRegistry, CapabilityRegistry, DryRunExecutor, ExecutionError, ExecutionResultCode,
+    Executor, SharedApplicationRegistry, open_app_descriptor,
 };
-use halquen_domain::{ActionRequest, AuditId, CapabilityDescriptor, DiagnosticEntry, ExecutionId};
-use halquen_policy::{PolicyEngine, PolicyOutcome};
+use halquen_domain::{
+    ActionContext, ActionProposal, AuditId, CapabilityDescriptor, DaemonSession, DaemonSessionId,
+    DiagnosticEntry, ExecutionId, ProposalId,
+};
+use halquen_policy::{PolicyContext, PolicyEngine, PolicyOutcome, PolicyReason};
 use halquen_protocol::{
     HealthStatus, PROTOCOL_VERSION, ProtocolErrorBody, ProtocolErrorCode, ProtocolRequest,
     ProtocolResponse, RequestEnvelope, ResponseEnvelope,
@@ -23,7 +28,11 @@ pub struct HalquenService<E> {
     pub(crate) registry: CapabilityRegistry,
     pub(crate) policy: PolicyEngine,
     pub(crate) executor: E,
+    pub(crate) dry_run_executor: DryRunExecutor,
     pub(crate) database: Database,
+    pub(crate) applications: SharedApplicationRegistry,
+    pub(crate) agent_host: AgentHost,
+    pub(crate) daemon_session_id: DaemonSessionId,
     pub(crate) provider_client: Arc<dyn ProviderClient>,
     pub(crate) secret_store: Arc<dyn SecretStore>,
     pub(crate) pending_confirmations: BTreeMap<String, PendingConfirmation>,
@@ -32,9 +41,11 @@ pub struct HalquenService<E> {
 }
 
 pub(crate) struct PendingConfirmation {
-    pub action: ActionRequest,
+    pub request_execution_id: ExecutionId,
+    pub proposal: ActionProposal,
     pub title: String,
     pub expires_at_ms: i64,
+    pub session_id: Option<halquen_domain::ChatSessionId>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -45,13 +56,39 @@ pub(crate) struct ServiceEnvironment {
 
 impl<E: Executor> HalquenService<E> {
     pub fn new(executor: E, database: Database) -> Result<Self, Box<dyn std::error::Error>> {
+        let applications = Arc::new(RwLock::new(ApplicationRegistry::from_applications(
+            database.list_registered_applications(200)?,
+        )?));
+        Self::new_with_application_registry(executor, database, applications, false)
+    }
+
+    pub fn new_with_application_registry(
+        executor: E,
+        mut database: Database,
+        applications: SharedApplicationRegistry,
+        allow_unsafe_agents: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut registry = CapabilityRegistry::new();
         registry.register(open_app_descriptor())?;
+        let daemon_session_id = DaemonSessionId::generate();
+        database.begin_daemon_session(&DaemonSession {
+            id: daemon_session_id.clone(),
+            started_at_ms: now_ms(),
+            ended_at_ms: None,
+        })?;
         Ok(Self {
             registry,
             policy: PolicyEngine::new(),
             executor,
+            dry_run_executor: DryRunExecutor::new(),
             database,
+            applications,
+            agent_host: if allow_unsafe_agents {
+                AgentHost::with_unsafe_unsandboxed_opt_in()
+            } else {
+                AgentHost::new()
+            },
+            daemon_session_id,
             provider_client: Arc::new(OpenAiCompatibleClient::new()?),
             secret_store: Arc::new(KeyringSecretStore::new("halquen.ai-provider")),
             pending_confirmations: BTreeMap::new(),
@@ -64,13 +101,31 @@ impl<E: Executor> HalquenService<E> {
         registry: CapabilityRegistry,
         policy: PolicyEngine,
         executor: E,
-        database: Database,
+        mut database: Database,
     ) -> Self {
+        let applications = Arc::new(RwLock::new(
+            ApplicationRegistry::from_applications(
+                database
+                    .list_registered_applications(200)
+                    .unwrap_or_default(),
+            )
+            .unwrap_or_default(),
+        ));
+        let daemon_session_id = DaemonSessionId::generate();
+        let _ = database.begin_daemon_session(&DaemonSession {
+            id: daemon_session_id.clone(),
+            started_at_ms: now_ms(),
+            ended_at_ms: None,
+        });
         Self {
             registry,
             policy,
             executor,
+            dry_run_executor: DryRunExecutor::new(),
             database,
+            applications,
+            agent_host: AgentHost::new(),
+            daemon_session_id,
             provider_client: Arc::new(DisabledProviderClient),
             secret_store: Arc::new(KeyringSecretStore::new("halquen.ai-provider")),
             pending_confirmations: BTreeMap::new(),
@@ -110,6 +165,7 @@ impl<E: Executor> HalquenService<E> {
             }),
             ProtocolRequest::EvaluateAction { action } => self.evaluate_action(action),
             ProtocolRequest::DryRunAction { action } => self.dry_run_action(action).await,
+            ProtocolRequest::ExecuteAction { action } => self.execute_action(action).await,
             ProtocolRequest::MemoryStats => self.memory_stats(),
             ProtocolRequest::AuditStats => self.audit_stats(),
             ProtocolRequest::Chat { request } => match cancellation {
@@ -154,8 +210,41 @@ impl<E: Executor> HalquenService<E> {
             ProtocolRequest::ConfirmAction {
                 confirmation_id,
                 allow,
-            } => self.confirm_action(&confirmation_id, allow).await,
+                persistence,
+                expires_at_ms,
+            } => {
+                self.confirm_action(&confirmation_id, allow, persistence, expires_at_ms)
+                    .await
+            }
             ProtocolRequest::PreviewAiRequest { request } => self.preview_ai_request(request),
+            ProtocolRequest::GetSecurityOverview => self.security_overview(),
+            ProtocolRequest::UpdateSecurityProfile { profile } => {
+                self.update_security_profile(profile)
+            }
+            ProtocolRequest::ListPermissionGrants { limit } => self.list_permission_grants(limit),
+            ProtocolRequest::UpsertPermissionGrant { grant } => self.upsert_permission_grant(grant),
+            ProtocolRequest::RevokePermissionGrant { permission_id } => {
+                self.revoke_permission_grant(&permission_id)
+            }
+            ProtocolRequest::ListResourceLabels { limit } => self.list_resource_labels(limit),
+            ProtocolRequest::UpsertResourceLabel { label } => self.upsert_resource_label(label),
+            ProtocolRequest::RemoveResourceLabel { resource_label_id } => {
+                self.remove_resource_label(&resource_label_id)
+            }
+            ProtocolRequest::ListAgents { limit } => self.list_agents(limit),
+            ProtocolRequest::UpsertAgent { agent } => self.upsert_agent(agent),
+            ProtocolRequest::RemoveAgent { agent_id } => self.remove_agent(&agent_id),
+            ProtocolRequest::RunAgent { request } => self.run_agent(request).await,
+            ProtocolRequest::ListAgentSessions { limit } => self.list_agent_sessions(limit),
+            ProtocolRequest::ListRegisteredApplications { limit } => {
+                self.list_registered_applications(limit)
+            }
+            ProtocolRequest::UpsertRegisteredApplication { application } => {
+                self.upsert_registered_application(application)
+            }
+            ProtocolRequest::RemoveRegisteredApplication { entity_id } => {
+                self.remove_registered_application(&entity_id)
+            }
         }
         .unwrap_or_else(|error| ProtocolResponse::Error { error });
 
@@ -197,7 +286,12 @@ impl<E: Executor> HalquenService<E> {
         action: halquen_domain::ActionRequest,
     ) -> Result<ProtocolResponse, ProtocolErrorBody> {
         let descriptor = self.descriptor_for(&action)?.clone();
-        let decision = self.policy.evaluate(&descriptor);
+        let proposal = ActionProposal::new(action, ActionContext::trusted_user(None))
+            .map_err(|_| invalid_action_context())?;
+        let context = self.policy_context(&proposal, None)?;
+        let decision = self
+            .policy
+            .evaluate_proposal(&descriptor, &proposal, &context);
         let timestamp = now_ms();
         let audit = AuditRecord {
             id: AuditId::generate(),
@@ -216,14 +310,65 @@ impl<E: Executor> HalquenService<E> {
         &mut self,
         action: halquen_domain::ActionRequest,
     ) -> Result<ProtocolResponse, ProtocolErrorBody> {
-        let descriptor = self.descriptor_for(&action)?.clone();
+        let proposal = ActionProposal::new(action, ActionContext::trusted_user(None))
+            .map_err(|_| invalid_action_context())?;
+        self.dry_run_proposal(proposal, None).await
+    }
+
+    pub(crate) async fn execute_action(
+        &mut self,
+        action: halquen_domain::ActionRequest,
+    ) -> Result<ProtocolResponse, ProtocolErrorBody> {
+        let proposal = ActionProposal::new(action, ActionContext::trusted_user(None))
+            .map_err(|_| invalid_action_context())?;
+        self.execute_proposal(proposal, None).await
+    }
+
+    pub(crate) async fn dry_run_proposal(
+        &mut self,
+        proposal: ActionProposal,
+        session_id: Option<&halquen_domain::ChatSessionId>,
+    ) -> Result<ProtocolResponse, ProtocolErrorBody> {
+        self.process_proposal(proposal, session_id, true).await
+    }
+
+    pub(crate) async fn execute_proposal(
+        &mut self,
+        proposal: ActionProposal,
+        session_id: Option<&halquen_domain::ChatSessionId>,
+    ) -> Result<ProtocolResponse, ProtocolErrorBody> {
+        self.process_proposal(proposal, session_id, false).await
+    }
+
+    async fn process_proposal(
+        &mut self,
+        proposal: ActionProposal,
+        session_id: Option<&halquen_domain::ChatSessionId>,
+        simulate: bool,
+    ) -> Result<ProtocolResponse, ProtocolErrorBody> {
+        let descriptor = self.descriptor_for(&proposal.action)?.clone();
         let execution_id = ExecutionId::generate();
+        let proposal_id = ProposalId::generate();
         let started_at_ms = now_ms();
-        let evaluation = self
-            .policy
-            .authorize(&descriptor, action, execution_id.clone());
+        let context = self.policy_context(&proposal, session_id)?;
+        let evaluation = self.policy.authorize_proposal(
+            &descriptor,
+            proposal.clone(),
+            execution_id.clone(),
+            &context,
+        );
         let decision = evaluation.decision.clone();
         let mut audit_records = vec![
+            AuditRecord {
+                id: AuditId::generate(),
+                created_at_ms: started_at_ms,
+                event: AuditEvent::ProposalCreated {
+                    execution_id: execution_id.clone(),
+                    proposal_id,
+                    capability_id: descriptor.id.clone(),
+                    context: proposal.context.sanitized_summary(),
+                },
+            },
             AuditRecord {
                 id: AuditId::generate(),
                 created_at_ms: started_at_ms,
@@ -244,92 +389,150 @@ impl<E: Executor> HalquenService<E> {
             },
         ];
 
-        let (status, result_code, error_code, sanitized_error) =
-            if let Some(authorization) = evaluation.into_authorization() {
-                audit_records.push(AuditRecord {
-                    id: AuditId::generate(),
-                    created_at_ms: started_at_ms,
-                    event: AuditEvent::ExecutionStarted {
-                        execution_id: execution_id.clone(),
-                        capability_id: descriptor.id.clone(),
-                    },
-                });
-                match timeout(
+        let (status, result_code, error_code, sanitized_error) = if let Some(authorization) =
+            evaluation.into_authorization()
+        {
+            if decision.reason == PolicyReason::PersistentExactAllow {
+                let permission_session = proposal
+                    .context
+                    .agent
+                    .as_ref()
+                    .map(|identity| {
+                        halquen_domain::PermissionSessionScope::Agent(identity.session_id.clone())
+                    })
+                    .or_else(|| {
+                        session_id
+                            .cloned()
+                            .map(halquen_domain::PermissionSessionScope::Chat)
+                    });
+                let agent_id = proposal
+                    .context
+                    .agent
+                    .as_ref()
+                    .map(|identity| &identity.agent_id);
+                if self
+                    .database
+                    .claim_permission_for_proposal(
+                        &proposal,
+                        permission_session.as_ref(),
+                        agent_id,
+                        started_at_ms,
+                    )
+                    .map_err(internal_error)?
+                    .is_none()
+                {
+                    return Err(ProtocolErrorBody {
+                        code: ProtocolErrorCode::PrivacyDenied,
+                        message: "the exact permission is no longer active".to_owned(),
+                    });
+                }
+            }
+            audit_records.push(AuditRecord {
+                id: AuditId::generate(),
+                created_at_ms: started_at_ms,
+                event: AuditEvent::AuthorizationCreated {
+                    execution_id: execution_id.clone(),
+                    capability_id: descriptor.id.clone(),
+                    agent: proposal.context.agent.clone(),
+                },
+            });
+            audit_records.push(AuditRecord {
+                id: AuditId::generate(),
+                created_at_ms: started_at_ms,
+                event: AuditEvent::ExecutionStarted {
+                    execution_id: execution_id.clone(),
+                    capability_id: descriptor.id.clone(),
+                },
+            });
+            let execution = if simulate {
+                timeout(
+                    Duration::from_millis(descriptor.timeout_ms),
+                    self.dry_run_executor.execute(authorization),
+                )
+                .await
+            } else {
+                timeout(
                     Duration::from_millis(descriptor.timeout_ms),
                     self.executor.execute(authorization),
                 )
                 .await
-                {
-                    Ok(Ok(outcome)) => {
-                        let result = match outcome.code {
-                            ExecutionResultCode::Simulated => SafeResultCode::Simulated,
-                        };
-                        audit_records.push(AuditRecord {
-                            id: AuditId::generate(),
-                            created_at_ms: now_ms(),
-                            event: AuditEvent::ExecutionCompleted {
-                                execution_id: execution_id.clone(),
-                                capability_id: descriptor.id.clone(),
-                                result_code: Some(result),
-                            },
-                        });
-                        (ExecutionStatus::DryRunSucceeded, Some(result), None, None)
-                    }
-                    Ok(Err(_)) => {
-                        let code = "executor_contract_rejected".to_owned();
-                        audit_records.push(AuditRecord {
-                            id: AuditId::generate(),
-                            created_at_ms: now_ms(),
-                            event: AuditEvent::ExecutionFailed {
-                                execution_id: execution_id.clone(),
-                                capability_id: descriptor.id.clone(),
-                                error_code: code.clone(),
-                            },
-                        });
-                        (
-                            ExecutionStatus::Failed,
-                            None,
-                            Some(code),
-                            Some("executor rejected the authorized request".to_owned()),
-                        )
-                    }
-                    Err(_) => {
-                        let code = "capability_timeout".to_owned();
-                        audit_records.push(AuditRecord {
-                            id: AuditId::generate(),
-                            created_at_ms: now_ms(),
-                            event: AuditEvent::ExecutionTimedOut {
-                                execution_id: execution_id.clone(),
-                                capability_id: descriptor.id.clone(),
-                                error_code: code.clone(),
-                            },
-                        });
-                        (
-                            ExecutionStatus::TimedOut,
-                            None,
-                            Some(code),
-                            Some("capability execution exceeded its trusted deadline".to_owned()),
-                        )
-                    }
-                }
-            } else {
-                let event = match decision.outcome {
-                    PolicyOutcome::Confirm => AuditEvent::ConfirmationRequired {
-                        execution_id: execution_id.clone(),
-                        capability_id: descriptor.id.clone(),
-                    },
-                    PolicyOutcome::Deny | PolicyOutcome::Allow => AuditEvent::ActionDenied {
-                        execution_id: execution_id.clone(),
-                        capability_id: descriptor.id.clone(),
-                    },
-                };
-                audit_records.push(AuditRecord {
-                    id: AuditId::generate(),
-                    created_at_ms: now_ms(),
-                    event,
-                });
-                (ExecutionStatus::NotExecuted, None, None, None)
             };
+            match execution {
+                Ok(Ok(outcome)) => {
+                    let (status, result) = match outcome.code {
+                        ExecutionResultCode::Simulated => {
+                            (ExecutionStatus::DryRunSucceeded, SafeResultCode::Simulated)
+                        }
+                        ExecutionResultCode::Launched => {
+                            (ExecutionStatus::Succeeded, SafeResultCode::Launched)
+                        }
+                    };
+                    audit_records.push(AuditRecord {
+                        id: AuditId::generate(),
+                        created_at_ms: now_ms(),
+                        event: AuditEvent::ExecutionCompleted {
+                            execution_id: execution_id.clone(),
+                            capability_id: descriptor.id.clone(),
+                            result_code: Some(result),
+                        },
+                    });
+                    (status, Some(result), None, None)
+                }
+                Ok(Err(error)) => {
+                    let code = execution_error_code(&error).to_owned();
+                    audit_records.push(AuditRecord {
+                        id: AuditId::generate(),
+                        created_at_ms: now_ms(),
+                        event: AuditEvent::ExecutionFailed {
+                            execution_id: execution_id.clone(),
+                            capability_id: descriptor.id.clone(),
+                            error_code: code.clone(),
+                        },
+                    });
+                    (
+                        ExecutionStatus::Failed,
+                        None,
+                        Some(code),
+                        Some("executor rejected the authorized request".to_owned()),
+                    )
+                }
+                Err(_) => {
+                    let code = "capability_timeout".to_owned();
+                    audit_records.push(AuditRecord {
+                        id: AuditId::generate(),
+                        created_at_ms: now_ms(),
+                        event: AuditEvent::ExecutionTimedOut {
+                            execution_id: execution_id.clone(),
+                            capability_id: descriptor.id.clone(),
+                            error_code: code.clone(),
+                        },
+                    });
+                    (
+                        ExecutionStatus::TimedOut,
+                        None,
+                        Some(code),
+                        Some("capability execution exceeded its trusted deadline".to_owned()),
+                    )
+                }
+            }
+        } else {
+            let event = match decision.outcome {
+                PolicyOutcome::Confirm => AuditEvent::ConfirmationRequired {
+                    execution_id: execution_id.clone(),
+                    capability_id: descriptor.id.clone(),
+                },
+                PolicyOutcome::Deny | PolicyOutcome::Allow => AuditEvent::ActionDenied {
+                    execution_id: execution_id.clone(),
+                    capability_id: descriptor.id.clone(),
+                },
+            };
+            audit_records.push(AuditRecord {
+                id: AuditId::generate(),
+                created_at_ms: now_ms(),
+                event,
+            });
+            (ExecutionStatus::NotExecuted, None, None, None)
+        };
         let finished_at_ms = now_ms().max(started_at_ms);
         let receipt = ExecutionReceipt {
             execution_id: execution_id.clone(),
@@ -350,7 +553,32 @@ impl<E: Executor> HalquenService<E> {
             .record_execution(&receipt, &audit_records)
             .map_err(internal_error)?;
 
-        Ok(ProtocolResponse::DryRun { decision, receipt })
+        Ok(if simulate {
+            ProtocolResponse::DryRun { decision, receipt }
+        } else {
+            ProtocolResponse::Execution { decision, receipt }
+        })
+    }
+
+    pub(crate) fn policy_context(
+        &self,
+        proposal: &ActionProposal,
+        session_id: Option<&halquen_domain::ChatSessionId>,
+    ) -> Result<PolicyContext, ProtocolErrorBody> {
+        let timestamp = now_ms();
+        let mut context = PolicyContext::default();
+        context.set_action_context(proposal.context.clone());
+        context.set_profile(self.database.security_profile().map_err(internal_error)?);
+        context.set_now_ms(timestamp);
+        context.set_session_id(session_id.cloned());
+        for grant in self
+            .database
+            .active_permission_grants(timestamp, 200)
+            .map_err(internal_error)?
+        {
+            context.add_permission_grant(grant);
+        }
+        Ok(context)
     }
 
     pub(crate) fn descriptor_for(
@@ -371,6 +599,23 @@ impl<E: Executor> HalquenService<E> {
             });
         }
         Ok(descriptor)
+    }
+}
+
+fn invalid_action_context() -> ProtocolErrorBody {
+    ProtocolErrorBody {
+        code: ProtocolErrorCode::InvalidAction,
+        message: "action provenance or resource context is invalid".to_owned(),
+    }
+}
+
+pub(crate) fn execution_error_code(error: &ExecutionError) -> &'static str {
+    match error {
+        ExecutionError::InvalidAuthorization => "executor_contract_rejected",
+        ExecutionError::UnknownApplication => "application_not_registered",
+        ExecutionError::ExecutableIdentityChanged => "executable_identity_changed",
+        ExecutionError::SpawnFailed => "application_spawn_failed",
+        ExecutionError::RegistryUnavailable => "application_registry_unavailable",
     }
 }
 
@@ -455,11 +700,11 @@ mod tests {
         )
     }
 
-    fn dry_run(id: &str) -> RequestEnvelope {
+    fn execute(id: &str) -> RequestEnvelope {
         RequestEnvelope {
             version: PROTOCOL_VERSION,
             request_id: "request:test".to_owned(),
-            request: ProtocolRequest::DryRunAction {
+            request: ProtocolRequest::ExecuteAction {
                 action: ActionRequest::new(CapabilityId::new(id).unwrap(), ActionArguments::None),
             },
         }
@@ -468,9 +713,9 @@ mod tests {
     #[tokio::test]
     async fn allowed_request_runs_executor_and_persists_audit() {
         let mut service = service(vec![capability("test.read", RiskClass::ReadOnly)]);
-        let response = service.handle(dry_run("test.read")).await;
+        let response = service.handle(execute("test.read")).await;
         let execution_id = match response.response {
-            ProtocolResponse::DryRun { receipt, .. } => {
+            ProtocolResponse::Execution { receipt, .. } => {
                 assert_eq!(receipt.status, ExecutionStatus::DryRunSucceeded);
                 receipt.execution_id
             }
@@ -479,15 +724,17 @@ mod tests {
         assert_eq!(service.executor.calls.get(), 1);
         let stats = service.database().audit_stats().unwrap();
         assert_eq!(stats.executions, 1);
-        assert_eq!(stats.records, 4);
+        assert_eq!(stats.records, 6);
         assert_eq!(
             service
                 .database()
                 .audit_event_kinds(execution_id.as_str())
                 .unwrap(),
             vec![
+                "proposal_created".to_owned(),
                 "action_requested".to_owned(),
                 "policy_evaluated".to_owned(),
+                "authorization_created".to_owned(),
                 "execution_started".to_owned(),
                 "execution_completed".to_owned(),
             ]
@@ -509,9 +756,9 @@ mod tests {
             ),
         ] {
             let mut service = service(vec![capability(id, risk)]);
-            let response = service.handle(dry_run(id)).await;
+            let response = service.handle(execute(id)).await;
             let execution_id = match response.response {
-                ProtocolResponse::DryRun { decision, receipt } => {
+                ProtocolResponse::Execution { decision, receipt } => {
                     assert_eq!(decision.outcome, expected);
                     assert_eq!(receipt.status, ExecutionStatus::NotExecuted);
                     receipt.execution_id
@@ -550,9 +797,9 @@ mod tests {
             Database::open_in_memory().unwrap(),
         );
 
-        let response = service.handle(dry_run("test.slow")).await;
+        let response = service.handle(execute("test.slow")).await;
         let execution_id = match response.response {
-            ProtocolResponse::DryRun { receipt, .. } => {
+            ProtocolResponse::Execution { receipt, .. } => {
                 assert_eq!(receipt.status, ExecutionStatus::TimedOut);
                 receipt.execution_id
             }
@@ -565,8 +812,10 @@ mod tests {
                 .audit_event_kinds(execution_id.as_str())
                 .unwrap(),
             vec![
+                "proposal_created".to_owned(),
                 "action_requested".to_owned(),
                 "policy_evaluated".to_owned(),
+                "authorization_created".to_owned(),
                 "execution_started".to_owned(),
                 "execution_timed_out".to_owned(),
             ]

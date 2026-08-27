@@ -29,6 +29,22 @@ pub fn run() -> tauri::Result<()> {
             commands::submit_response_feedback,
             commands::confirm_action,
             commands::preview_ai_request,
+            commands::get_security_overview,
+            commands::update_security_profile,
+            commands::list_permission_grants,
+            commands::upsert_permission_grant,
+            commands::revoke_permission_grant,
+            commands::list_resource_labels,
+            commands::upsert_resource_label,
+            commands::remove_resource_label,
+            commands::list_agents,
+            commands::upsert_agent,
+            commands::remove_agent,
+            commands::run_agent,
+            commands::list_agent_sessions,
+            commands::list_registered_applications,
+            commands::upsert_registered_application,
+            commands::remove_registered_application,
         ])
         .run(tauri::generate_context!())
 }

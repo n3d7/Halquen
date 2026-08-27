@@ -13,13 +13,36 @@ pub enum LocalIntent {
     ForgetPreference {
         key: String,
     },
+    ContextualOpenApp,
+    CorrectOpenApp {
+        rejected: String,
+        accepted: String,
+    },
 }
 
 pub fn resolve_local(message: &str) -> Option<LocalIntent> {
     let trimmed = message.trim();
-    parse_open_app(trimmed)
+    parse_correction(trimmed)
+        .or_else(|| parse_contextual_open(trimmed))
+        .or_else(|| parse_open_app(trimmed))
         .or_else(|| parse_remember(trimmed))
         .or_else(|| parse_forget(trimmed))
+}
+
+pub fn application_entity(display_name: &str) -> Option<EntityId> {
+    let display_name = clean_fragment(display_name)?;
+    let slug = display_name
+        .to_lowercase()
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    EntityId::new(format!("app:{slug}")).ok()
 }
 
 pub fn normalize_request(message: &str) -> String {
@@ -46,21 +69,39 @@ fn parse_open_app(message: &str) -> Option<LocalIntent> {
         .strip_prefix("open ")
         .or_else(|| lower.strip_prefix("открой "))?;
     let display_name = clean_fragment(raw_name)?;
-    let slug = display_name
-        .chars()
-        .map(|character| {
-            if character.is_alphanumeric() {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    let entity_id = EntityId::new(format!("app:{slug}")).ok()?;
+    let entity_id = application_entity(&display_name)?;
     Some(LocalIntent::OpenApp {
         display_name,
         entity_id,
     })
+}
+
+fn parse_contextual_open(message: &str) -> Option<LocalIntent> {
+    let normalized = normalize_request(message);
+    matches!(
+        normalized.as_str(),
+        "open it"
+            | "open that"
+            | "open that messenger"
+            | "open the messenger"
+            | "открой это"
+            | "открой это самое"
+            | "запусти тот мессенджер"
+            | "открой тот мессенджер"
+    )
+    .then_some(LocalIntent::ContextualOpenApp)
+}
+
+fn parse_correction(message: &str) -> Option<LocalIntent> {
+    let normalized = message.trim().trim_end_matches(['.', '!', '?']);
+    let lower = normalized.to_lowercase();
+    let remainder = lower
+        .strip_prefix("not ")
+        .or_else(|| lower.strip_prefix("не "))?;
+    let comma = remainder.find(',')?;
+    let rejected = clean_fragment(&remainder[..comma])?;
+    let accepted = clean_fragment(&remainder[comma + 1..])?;
+    Some(LocalIntent::CorrectOpenApp { rejected, accepted })
 }
 
 fn parse_remember(message: &str) -> Option<LocalIntent> {
@@ -158,5 +199,20 @@ mod tests {
     #[test]
     fn normalization_is_exact_and_deterministic() {
         assert_eq!(normalize_request("  Hello,   HALQUEN! "), "hello halquen");
+    }
+
+    #[test]
+    fn contextual_open_and_correction_are_structured() {
+        assert_eq!(
+            resolve_local("запусти тот мессенджер"),
+            Some(LocalIntent::ContextualOpenApp)
+        );
+        assert_eq!(
+            resolve_local("не Telegram, Discord"),
+            Some(LocalIntent::CorrectOpenApp {
+                rejected: "telegram".to_owned(),
+                accepted: "discord".to_owned(),
+            })
+        );
     }
 }
