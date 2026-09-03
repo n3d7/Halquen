@@ -370,7 +370,24 @@ impl RunningAgent {
 
     async fn join_stderr(&mut self) -> Result<Vec<u8>, AgentHostError> {
         match self.stderr_task.take() {
-            Some(task) => task.await.map_err(|_| AgentHostError::Io)?,
+            Some(mut task) => {
+                let remaining = match self.remaining() {
+                    Ok(remaining) => remaining,
+                    Err(error) => {
+                        task.abort();
+                        let _ = task.await;
+                        return Err(error);
+                    }
+                };
+                match timeout(remaining, &mut task).await {
+                    Ok(result) => result.map_err(|_| AgentHostError::Io)?,
+                    Err(_) => {
+                        task.abort();
+                        let _ = task.await;
+                        Err(AgentHostError::TimedOut)
+                    }
+                }
+            }
             None => Ok(Vec::new()),
         }
     }
@@ -648,6 +665,38 @@ time.sleep(5)
             Err(AgentHostError::TimedOut)
         ));
         assert!(running.child.try_wait().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn inherited_stderr_cannot_outlive_agent_deadline() {
+        let source = r#"import json,sys
+json.loads(sys.stdin.readline())
+print(json.dumps({"version":1,"kind":"proposals","message":"","proposals":[]}), flush=True)
+json.loads(sys.stdin.readline())
+"#;
+        let Some(mut configuration) = python_agent(source, 1_024) else {
+            return;
+        };
+        configuration.timeout_ms = 150;
+        let identity = execution_identity(configuration.id.clone());
+        let mut running = AgentHost::with_unsafe_unsandboxed_opt_in()
+            .start(&configuration, identity, "request", &[])
+            .await
+            .unwrap();
+        running.receive_proposals().await.unwrap();
+        if let Some(stderr_task) = running
+            .stderr_task
+            .replace(tokio::spawn(std::future::pending()))
+        {
+            stderr_task.abort();
+            let _ = stderr_task.await;
+        }
+
+        let completion = timeout(Duration::from_millis(500), running.complete(&[])).await;
+        assert!(
+            matches!(completion, Ok(Err(AgentHostError::TimedOut))),
+            "unexpected completion: {completion:?}"
+        );
     }
 
     #[tokio::test]
