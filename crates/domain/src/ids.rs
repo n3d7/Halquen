@@ -87,6 +87,14 @@ macro_rules! typed_id {
             }
         }
 
+        impl std::str::FromStr for $name {
+            type Err = IdError;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                Self::new(value)
+            }
+        }
+
         impl<'de> Deserialize<'de> for $name {
             fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
             where
@@ -177,6 +185,14 @@ mod tests {
         assert!(CapabilityId::new("open_app").is_err());
         assert!(CapabilityId::new("System.open_app").is_err());
         assert!(CapabilityId::new("system.shell-execute").is_err());
+    }
+
+    #[test]
+    fn typed_ids_support_standard_string_parsing() {
+    let id: CapabilityId = "system.open_app".parse().unwrap();
+    assert_eq!(id.as_str(), "system.open_app");
+
+    assert!("not valid".parse::<CapabilityId>().is_err());
     }
 
     #[test]
