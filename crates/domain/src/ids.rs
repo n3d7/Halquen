@@ -189,10 +189,10 @@ mod tests {
 
     #[test]
     fn typed_ids_support_standard_string_parsing() {
-    let id: CapabilityId = "system.open_app".parse().unwrap();
-    assert_eq!(id.as_str(), "system.open_app");
+        let id: CapabilityId = "system.open_app".parse().unwrap();
+        assert_eq!(id.as_str(), "system.open_app");
 
-    assert!("not valid".parse::<CapabilityId>().is_err());
+        assert!("not valid".parse::<CapabilityId>().is_err());
     }
 
     #[test]
