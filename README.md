@@ -1,3 +1,5 @@
+# Work in progress
+
 # Halquen
 
 Halquen is a Linux-first, local-first personal assistant and authority layer for AI-assisted
